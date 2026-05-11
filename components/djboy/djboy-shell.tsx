@@ -3,7 +3,7 @@
 import { useState, useCallback, useRef, useEffect } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { Mic, MicOff, Settings, Paperclip, Link2, Send, X, Trash2, Eye, EyeOff, ChevronDown, Plus } from "lucide-react"
-import { FluidOrb, OrbGlow, type OrbState } from "./fluid-orb"
+import { Orb, type AgentState } from "@/components/ui/orb"
 import { useVoice } from "@/hooks/use-voice"
 import { useTTS } from "@/hooks/use-tts"
 import { useMemory, type MemoryStore, type ProjectContext } from "@/hooks/use-memory"
@@ -26,6 +26,10 @@ interface Settings {
   micDeviceId: string
   systemPrompt: string
 }
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+type OrbState = "idle" | "wake-listening" | "listening" | "thinking" | "speaking"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -59,6 +63,17 @@ const STATE_LABEL: Record<OrbState, string> = {
   listening:        "Ouvindo...",
   thinking:         "Processando...",
   speaking:         "Respondendo",
+}
+
+// Map internal OrbState → ElevenLabs AgentState + color pair
+function orbToAgent(s: OrbState): { agentState: AgentState; colors: [string, string] } {
+  switch (s) {
+    case "listening":        return { agentState: "listening", colors: ["#4ade80", "#22d3ee"] }
+    case "wake-listening":   return { agentState: "listening", colors: ["#818cf8", "#a5b4fc"] }
+    case "thinking":         return { agentState: "thinking",  colors: ["#fb923c", "#fbbf24"] }
+    case "speaking":         return { agentState: "talking",   colors: ["#e879f9", "#c084fc"] }
+    default:                 return { agentState: null,        colors: ["#6366f1", "#818cf8"] }
+  }
 }
 
 function loadSettings(): Settings {
@@ -311,25 +326,29 @@ export function DJBoyShell() {
             >
               <motion.button
                 onClick={toggleVoice}
-                className="relative rounded-full outline-none focus-visible:ring-2 focus-visible:ring-white/20"
-                style={{ position: "relative" }}
+                className="relative outline-none"
                 whileTap={{ scale: 0.95 }}
                 aria-label={isActive ? "Pausar" : "Ativar DJ Boy"}
               >
-                {/* Ambient glow halo */}
-                <OrbGlow state={effectiveOrb} size={300} />
-                {/* Pulse ring when active */}
                 {isActive && (
                   <motion.div
-                    className="absolute inset-0 rounded-full border border-white/10"
-                    style={{ margin: "-18px" }}
-                    animate={{ scale: [1, 1.14, 1], opacity: [0.4, 0, 0.4] }}
-                    transition={{ duration: 2.8, repeat: Infinity, ease: "easeInOut" }}
+                    className="absolute inset-0 rounded-full"
+                    style={{
+                      boxShadow: `0 0 80px 30px ${orbToAgent(effectiveOrb).colors[0]}44`,
+                      margin: "-24px",
+                    }}
+                    animate={{ opacity: [0.5, 1, 0.5] }}
+                    transition={{ duration: 2.4, repeat: Infinity, ease: "easeInOut" }}
                   />
                 )}
-                <div style={{ position: "relative", zIndex: 1 }}>
-                  <FluidOrb state={effectiveOrb} audioLevel={audioLevel} size={300} />
-                </div>
+                <Orb
+                  className="w-[300px] h-[300px]"
+                  agentState={orbToAgent(effectiveOrb).agentState}
+                  colors={orbToAgent(effectiveOrb).colors}
+                  getInputVolume={() => audioLevel}
+                  getOutputVolume={() => (effectiveOrb === "speaking" ? 0.8 : 0)}
+                  seed={42}
+                />
               </motion.button>
 
               {/* Status label + action */}
@@ -385,12 +404,16 @@ export function DJBoyShell() {
               transition={{ duration: 0.35 }}
             >
               <motion.button onClick={toggleVoice} whileTap={{ scale: 0.94 }} aria-label="Toggle voz"
-                className="relative"
+                className="relative outline-none"
               >
-                <OrbGlow state={effectiveOrb} size={88} />
-                <div style={{ position: "relative", zIndex: 1 }}>
-                  <FluidOrb state={effectiveOrb} audioLevel={audioLevel} size={88} />
-                </div>
+                <Orb
+                  className="w-[88px] h-[88px]"
+                  agentState={orbToAgent(effectiveOrb).agentState}
+                  colors={orbToAgent(effectiveOrb).colors}
+                  getInputVolume={() => audioLevel}
+                  getOutputVolume={() => (effectiveOrb === "speaking" ? 0.8 : 0)}
+                  seed={42}
+                />
               </motion.button>
               <p className="text-[10px] tracking-[0.16em] uppercase font-medium" style={{ color: "rgba(255,255,255,0.28)" }}>
                 {STATE_LABEL[effectiveOrb]}
