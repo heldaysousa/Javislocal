@@ -320,25 +320,29 @@ export function DJBoyShell() {
                 whileTap={{ scale: 0.95 }}
                 aria-label={isActive ? "Pausar" : "Ativar DJ Boy"}
               >
-                {isActive && (
-                  <motion.div
-                    className="absolute inset-0 rounded-full pointer-events-none"
-                    style={{
-                      background:
-                        effectiveOrb === "listening"
-                          ? "radial-gradient(circle, rgba(34,211,238,0.18) 0%, transparent 70%)"
-                          : effectiveOrb === "speaking"
-                          ? "radial-gradient(circle, rgba(232,121,249,0.18) 0%, transparent 70%)"
-                          : effectiveOrb === "thinking"
-                          ? "radial-gradient(circle, rgba(251,146,60,0.16) 0%, transparent 70%)"
-                          : "radial-gradient(circle, rgba(99,102,241,0.14) 0%, transparent 70%)",
-                      margin: "-32px",
-                      borderRadius: "50%",
-                    }}
-                    animate={{ opacity: [0.5, 1, 0.5] }}
-                    transition={{ duration: 2.4, repeat: Infinity, ease: "easeInOut" }}
-                  />
-                )}
+                {/* Ambient glow — color matches orb STATE_CONFIG */}
+                <motion.div
+                  className="absolute inset-0 pointer-events-none"
+                  style={{
+                    background:
+                      effectiveOrb === "listening"
+                        ? "radial-gradient(circle at 50% 50%, rgba(134,239,172,0.18) 0%, rgba(34,211,238,0.12) 35%, transparent 72%)"
+                        : effectiveOrb === "speaking"
+                        ? "radial-gradient(circle at 50% 50%, rgba(240,171,252,0.20) 0%, rgba(168,85,247,0.12) 35%, transparent 72%)"
+                        : effectiveOrb === "thinking"
+                        ? "radial-gradient(circle at 50% 50%, rgba(252,211,77,0.18) 0%, rgba(249,115,22,0.12) 35%, transparent 72%)"
+                        : effectiveOrb === "wake-listening"
+                        ? "radial-gradient(circle at 50% 50%, rgba(165,180,252,0.16) 0%, rgba(99,102,241,0.10) 35%, transparent 72%)"
+                        : "radial-gradient(circle at 50% 50%, rgba(94,234,212,0.14) 0%, rgba(13,148,136,0.08) 35%, transparent 72%)",
+                    margin: "-40px",
+                    borderRadius: "50%",
+                  }}
+                  animate={{
+                    opacity: isActive ? [0.6, 1.0, 0.6] : [0.2, 0.38, 0.2],
+                    scale:   isActive ? [0.96, 1.04, 0.96] : [0.98, 1.01, 0.98],
+                  }}
+                  transition={{ duration: isActive ? 2.2 : 4.0, repeat: Infinity, ease: "easeInOut" }}
+                />
                 <Orb
                   className="w-[300px] h-[300px]"
                   orbState={effectiveOrb}
