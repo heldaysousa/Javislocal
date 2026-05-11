@@ -157,15 +157,36 @@ export function DJBoyShell() {
 
   // ─── TTS ────────────────────────────────────────────────────────────────────
 
+  // ─── Voice ──────────────────────────────────────────────────────────────────
+
+  const { audioLevel, error: voiceError, start, stop, resumeWake } = useVoice({
+    wakeName:    "dj boy",
+    micDeviceId: settings.micDeviceId || undefined,
+    lang:        "pt-BR",
+    silenceMs:   1400,
+    onTranscript: text => handleSend(text),
+    onStateChange: vs => {
+      if (vs === "listening")           setOrbState("listening")
+      else if (vs === "wake-listening") setOrbState("wake-listening")
+    },
+  })
+
   const { speak, stop: stopSpeaking, isSpeaking } = useTTS({
     provider: settings.ttsProvider,
     googleApiKey: settings.googleTTSKey || undefined,
     lang: "pt-BR",
     onStart: () => setOrbState("speaking"),
-    onEnd:   () => setOrbState(isActive ? "wake-listening" : "idle"),
+    onEnd:   () => {
+      // After speaking, go back to listening for next command
+      if (isActive) {
+        resumeWake()
+      } else {
+        setOrbState("idle")
+      }
+    },
   })
 
-  // ─── Send message ────��───────────────────────────────────────────────────────
+  // ─── Send message ─────────────────────────────────────────────────────────────
 
   const handleSend = useCallback(async (content: string, atts?: Message["attachments"]) => {
     if (!content.trim() && !atts?.length) return
@@ -192,31 +213,18 @@ export function DJBoyShell() {
     }
   }, [callLLM, speak, stopSpeaking, memory, showChat])
 
-  // ─── Voice ──────────────────────────────────────────────────────────────────
-
-  const { audioLevel, error: voiceError, start, stop } = useVoice({
-    wakeName:    "dj boy",
-    micDeviceId: settings.micDeviceId || undefined,
-    lang:        "pt-BR",
-    silenceMs:   1400,
-    onTranscript: text => handleSend(text),
-    onStateChange: vs => {
-      if (vs === "listening")           setOrbState("listening")
-      else if (vs === "wake-listening") setOrbState("wake-listening")
-    },
-  })
-
-const toggleVoice = useCallback(async () => {
-  console.log("[v0] toggleVoice chamado, isActive:", isActive)
-  if (isActive) {
-    console.log("[v0] Parando voz...")
-    stop(); stopSpeaking(); setIsActive(false); setOrbState("idle")
-  } else {
-    console.log("[v0] Iniciando voz...")
-    setIsActive(true); setOrbState("wake-listening"); await start()
-    console.log("[v0] start() retornou")
-  }
-}, [isActive, start, stop, stopSpeaking])
+  const toggleVoice = useCallback(async () => {
+    if (isActive) {
+      stop()
+      stopSpeaking()
+      setIsActive(false)
+      setOrbState("idle")
+    } else {
+      setIsActive(true)
+      setOrbState("wake-listening")
+      await start()
+    }
+  }, [isActive, start, stop, stopSpeaking])
 
 // Demo mode effect - simulates audio levels and cycles through states
 useEffect(() => {
