@@ -3,7 +3,7 @@
 import { useState, useCallback, useRef, useEffect } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { Mic, MicOff, Settings, Paperclip, Link2, Send, X, Trash2, Eye, EyeOff, ChevronDown, Plus } from "lucide-react"
-import { FluidOrb, type OrbState } from "./fluid-orb"
+import { FluidOrb, OrbGlow, type OrbState } from "./fluid-orb"
 import { useVoice } from "@/hooks/use-voice"
 import { useTTS } from "@/hooks/use-tts"
 import { useMemory, type MemoryStore, type ProjectContext } from "@/hooks/use-memory"
@@ -156,7 +156,7 @@ export function DJBoyShell() {
     onEnd:   () => setOrbState(isActive ? "wake-listening" : "idle"),
   })
 
-  // ─── Send message ────────────────────────────────────────────────────────────
+  // ─── Send message ────��───────────────────────────────────────────────────────
 
   const handleSend = useCallback(async (content: string, atts?: Message["attachments"]) => {
     if (!content.trim() && !atts?.length) return
@@ -236,18 +236,21 @@ export function DJBoyShell() {
   return (
     <div className="relative flex flex-col h-screen w-full overflow-hidden font-sans" style={{ background: "#000" }}>
 
-      {/* Ambient glow */}
+      {/* Full-screen ambient glow — reacts to state */}
       <motion.div
-        className="pointer-events-none absolute rounded-full blur-[120px]"
-        style={{ width: 500, height: 500, top: "50%", left: "50%", x: "-50%", y: "-60%", zIndex: 0 }}
+        className="pointer-events-none absolute"
+        style={{ inset: 0, zIndex: 0 }}
         animate={{
-          background: effectiveOrb === "speaking"  ? "radial-gradient(circle, rgba(232,121,249,0.14) 0%, rgba(124,92,252,0.08) 50%, transparent 70%)"
-                    : effectiveOrb === "listening" ? "radial-gradient(circle, rgba(52,211,153,0.14) 0%, rgba(16,185,129,0.07) 50%, transparent 70%)"
-                    : effectiveOrb === "thinking"  ? "radial-gradient(circle, rgba(245,158,11,0.12) 0%, rgba(217,119,6,0.06) 50%, transparent 70%)"
-                    : "radial-gradient(circle, rgba(94,106,210,0.12) 0%, rgba(124,92,252,0.06) 50%, transparent 70%)",
-          scale: effectiveOrb === "idle" ? [1, 1.04, 1] : [1, 1.12, 1],
+          background:
+            effectiveOrb === "speaking"
+              ? "radial-gradient(ellipse 70% 55% at 50% 40%, rgba(168,85,247,0.18) 0%, transparent 70%)"
+              : effectiveOrb === "listening"
+              ? "radial-gradient(ellipse 70% 55% at 50% 40%, rgba(16,185,129,0.18) 0%, transparent 70%)"
+              : effectiveOrb === "thinking"
+              ? "radial-gradient(ellipse 70% 55% at 50% 40%, rgba(245,158,11,0.16) 0%, transparent 70%)"
+              : "radial-gradient(ellipse 70% 55% at 50% 40%, rgba(79,70,229,0.16) 0%, transparent 70%)",
         }}
-        transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
+        transition={{ duration: 1.2, ease: "easeInOut" }}
       />
 
       {/* ── Top bar ─────────────────────────────────────────────────────── */}
@@ -300,7 +303,7 @@ export function DJBoyShell() {
           {!showChat ? (
             <motion.div
               key="full"
-              className="flex flex-col items-center gap-7 mt-8"
+              className="flex flex-col items-center gap-8 mt-6"
               initial={{ opacity: 0, y: 16 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: -20 }}
@@ -309,31 +312,37 @@ export function DJBoyShell() {
               <motion.button
                 onClick={toggleVoice}
                 className="relative rounded-full outline-none focus-visible:ring-2 focus-visible:ring-white/20"
+                style={{ position: "relative" }}
                 whileTap={{ scale: 0.95 }}
                 aria-label={isActive ? "Pausar" : "Ativar DJ Boy"}
               >
+                {/* Ambient glow halo */}
+                <OrbGlow state={effectiveOrb} size={300} />
                 {/* Pulse ring when active */}
                 {isActive && (
                   <motion.div
                     className="absolute inset-0 rounded-full border border-white/10"
-                    animate={{ scale: [1, 1.18, 1], opacity: [0.5, 0, 0.5] }}
-                    transition={{ duration: 2.4, repeat: Infinity, ease: "easeInOut" }}
+                    style={{ margin: "-18px" }}
+                    animate={{ scale: [1, 1.14, 1], opacity: [0.4, 0, 0.4] }}
+                    transition={{ duration: 2.8, repeat: Infinity, ease: "easeInOut" }}
                   />
                 )}
-                <FluidOrb state={effectiveOrb} audioLevel={audioLevel} size={248} />
+                <div style={{ position: "relative", zIndex: 1 }}>
+                  <FluidOrb state={effectiveOrb} audioLevel={audioLevel} size={300} />
+                </div>
               </motion.button>
 
-              {/* Status label */}
-              <div className="flex flex-col items-center gap-4">
+              {/* Status label + action */}
+              <div className="flex flex-col items-center gap-5 mt-2">
                 <AnimatePresence mode="wait">
                   <motion.p
                     key={effectiveOrb}
-                    initial={{ opacity: 0, y: 5 }}
+                    initial={{ opacity: 0, y: 6 }}
                     animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -5 }}
-                    transition={{ duration: 0.25 }}
-                    className="text-[13px] font-medium tracking-wide"
-                    style={{ color: "rgba(255,255,255,0.42)" }}
+                    exit={{ opacity: 0, y: -6 }}
+                    transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+                    className="text-[15px] font-light tracking-[0.08em]"
+                    style={{ color: "rgba(255,255,255,0.52)" }}
                   >
                     {STATE_LABEL[effectiveOrb]}
                   </motion.p>
@@ -341,22 +350,29 @@ export function DJBoyShell() {
 
                 <motion.button
                   onClick={toggleVoice}
-                  className="flex items-center gap-2 px-5 py-2.5 rounded-full text-[13px] font-medium transition-all"
+                  className="flex items-center gap-2.5 px-6 py-3 rounded-full text-[14px] font-medium transition-all"
                   style={{
-                    background: isActive ? "rgba(255,255,255,0.07)" : "rgba(255,255,255,0.05)",
-                    border: "1px solid rgba(255,255,255,0.10)",
-                    color: isActive ? "rgba(255,255,255,0.85)" : "rgba(255,255,255,0.45)",
-                    backdropFilter: "blur(20px)",
+                    background: isActive
+                      ? "rgba(255,255,255,0.08)"
+                      : "rgba(255,255,255,0.06)",
+                    border: "1px solid rgba(255,255,255,0.12)",
+                    color: isActive ? "rgba(255,255,255,0.90)" : "rgba(255,255,255,0.55)",
+                    backdropFilter: "blur(24px)",
+                    WebkitBackdropFilter: "blur(24px)",
+                    letterSpacing: "0.01em",
                   }}
-                  whileHover={{ background: "rgba(255,255,255,0.09)" }}
-                  whileTap={{ scale: 0.95 }}
+                  whileHover={{
+                    background: "rgba(255,255,255,0.11)",
+                    borderColor: "rgba(255,255,255,0.18)",
+                  }}
+                  whileTap={{ scale: 0.96 }}
                 >
-                  {isActive ? <Mic size={13} /> : <MicOff size={13} />}
-                  {isActive ? "Ouvindo — toque para pausar" : "Ativar voz"}
+                  {isActive ? <Mic size={14} /> : <MicOff size={14} />}
+                  {isActive ? 'Ouvindo — toque para pausar' : 'Ativar voz'}
                 </motion.button>
 
                 {voiceError && (
-                  <p className="text-xs" style={{ color: "#ff453a" }}>{voiceError}</p>
+                  <p className="text-[12px] font-medium" style={{ color: "#ff453a" }}>{voiceError}</p>
                 )}
               </div>
             </motion.div>
@@ -368,10 +384,15 @@ export function DJBoyShell() {
               animate={{ opacity: 1 }}
               transition={{ duration: 0.35 }}
             >
-              <motion.button onClick={toggleVoice} whileTap={{ scale: 0.94 }} aria-label="Toggle voz">
-                <FluidOrb state={effectiveOrb} audioLevel={audioLevel} size={76} />
+              <motion.button onClick={toggleVoice} whileTap={{ scale: 0.94 }} aria-label="Toggle voz"
+                className="relative"
+              >
+                <OrbGlow state={effectiveOrb} size={88} />
+                <div style={{ position: "relative", zIndex: 1 }}>
+                  <FluidOrb state={effectiveOrb} audioLevel={audioLevel} size={88} />
+                </div>
               </motion.button>
-              <p className="text-[10px] tracking-[0.18em] uppercase font-medium" style={{ color: "rgba(255,255,255,0.25)" }}>
+              <p className="text-[10px] tracking-[0.16em] uppercase font-medium" style={{ color: "rgba(255,255,255,0.28)" }}>
                 {STATE_LABEL[effectiveOrb]}
               </p>
             </motion.div>
