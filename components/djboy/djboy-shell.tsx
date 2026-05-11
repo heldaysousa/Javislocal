@@ -3,7 +3,7 @@
 import { useState, useCallback, useRef, useEffect } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { Mic, MicOff, Settings, Paperclip, Link2, Send, X, Trash2, Eye, EyeOff, ChevronDown, Plus } from "lucide-react"
-import { Orb, type AgentState } from "@/components/ui/orb"
+import { Orb } from "@/components/ui/orb"
 import { useVoice } from "@/hooks/use-voice"
 import { useTTS } from "@/hooks/use-tts"
 import { useMemory, type MemoryStore, type ProjectContext } from "@/hooks/use-memory"
@@ -32,6 +32,7 @@ interface Settings {
 type OrbState = "idle" | "wake-listening" | "listening" | "thinking" | "speaking"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
+
 
 const PROVIDERS = [
   { id: "deepseek",  label: "DeepSeek",  url: "https://api.deepseek.com/v1/chat/completions",                              model: "deepseek-chat",          placeholder: "sk-..." },
@@ -63,17 +64,6 @@ const STATE_LABEL: Record<OrbState, string> = {
   listening:        "Ouvindo...",
   thinking:         "Processando...",
   speaking:         "Respondendo",
-}
-
-// Map internal OrbState → ElevenLabs AgentState + color pair
-function orbToAgent(s: OrbState): { agentState: AgentState; colors: [string, string] } {
-  switch (s) {
-    case "listening":        return { agentState: "listening", colors: ["#4ade80", "#22d3ee"] }
-    case "wake-listening":   return { agentState: "listening", colors: ["#818cf8", "#a5b4fc"] }
-    case "thinking":         return { agentState: "thinking",  colors: ["#fb923c", "#fbbf24"] }
-    case "speaking":         return { agentState: "talking",   colors: ["#e879f9", "#c084fc"] }
-    default:                 return { agentState: null,        colors: ["#6366f1", "#818cf8"] }
-  }
 }
 
 function loadSettings(): Settings {
@@ -332,10 +322,18 @@ export function DJBoyShell() {
               >
                 {isActive && (
                   <motion.div
-                    className="absolute inset-0 rounded-full"
+                    className="absolute inset-0 rounded-full pointer-events-none"
                     style={{
-                      boxShadow: `0 0 80px 30px ${orbToAgent(effectiveOrb).colors[0]}44`,
-                      margin: "-24px",
+                      background:
+                        effectiveOrb === "listening"
+                          ? "radial-gradient(circle, rgba(34,211,238,0.18) 0%, transparent 70%)"
+                          : effectiveOrb === "speaking"
+                          ? "radial-gradient(circle, rgba(232,121,249,0.18) 0%, transparent 70%)"
+                          : effectiveOrb === "thinking"
+                          ? "radial-gradient(circle, rgba(251,146,60,0.16) 0%, transparent 70%)"
+                          : "radial-gradient(circle, rgba(99,102,241,0.14) 0%, transparent 70%)",
+                      margin: "-32px",
+                      borderRadius: "50%",
                     }}
                     animate={{ opacity: [0.5, 1, 0.5] }}
                     transition={{ duration: 2.4, repeat: Infinity, ease: "easeInOut" }}
@@ -343,11 +341,8 @@ export function DJBoyShell() {
                 )}
                 <Orb
                   className="w-[300px] h-[300px]"
-                  agentState={orbToAgent(effectiveOrb).agentState}
-                  colors={orbToAgent(effectiveOrb).colors}
-                  getInputVolume={() => audioLevel}
-                  getOutputVolume={() => (effectiveOrb === "speaking" ? 0.8 : 0)}
-                  seed={42}
+                  orbState={effectiveOrb}
+                  audioLevel={audioLevel}
                 />
               </motion.button>
 
@@ -408,11 +403,8 @@ export function DJBoyShell() {
               >
                 <Orb
                   className="w-[88px] h-[88px]"
-                  agentState={orbToAgent(effectiveOrb).agentState}
-                  colors={orbToAgent(effectiveOrb).colors}
-                  getInputVolume={() => audioLevel}
-                  getOutputVolume={() => (effectiveOrb === "speaking" ? 0.8 : 0)}
-                  seed={42}
+                  orbState={effectiveOrb}
+                  audioLevel={audioLevel}
                 />
               </motion.button>
               <p className="text-[10px] tracking-[0.16em] uppercase font-medium" style={{ color: "rgba(255,255,255,0.28)" }}>
