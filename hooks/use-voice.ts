@@ -88,11 +88,13 @@ export function useVoice({
   }
 
   const getSpeechRec = useCallback(() => {
-    const SpeechRec =
+    if (typeof window === "undefined") return null
+    return (
       window.SpeechRecognition ||
-      (window as unknown as { webkitSpeechRecognition: typeof SpeechRecognition })
-        .webkitSpeechRecognition
-    return SpeechRec || null
+      (window as unknown as { webkitSpeechRecognition?: typeof SpeechRecognition })
+        .webkitSpeechRecognition ||
+      null
+    )
   }, [])
 
   // Create and start a recognition session
@@ -176,9 +178,16 @@ export function useVoice({
       }
 
       rec.onend = () => {
-        // Auto-restart in wake mode unless stopping
-        if (activeRef.current && mode === "wake") {
+        if (!activeRef.current) return
+        if (mode === "wake") {
           setTimeout(() => createSession("wake"), 200)
+        } else {
+          // command mode terminou sem transcript capturado — volta para wake
+          const transcript = accumulatedRef.current.trim()
+          if (!transcript) {
+            updateState("wake-listening")
+            setTimeout(() => createSession("wake"), 200)
+          }
         }
       }
 

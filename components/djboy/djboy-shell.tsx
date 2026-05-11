@@ -145,19 +145,26 @@ export function DJBoyShell() {
 
     // Gemini: rota server-side para evitar CORS e exposição de key no browser
     if (s.provider === "gemini") {
+      const history = messagesRef.current.slice(-14).map(m => ({
+        role: m.role,
+        content: m.content,
+      }))
+      // Garante que o último item é sempre o user message atual
+      const allMessages = [...history, { role: "user" as const, content: msg }]
+
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          messages: [
-            ...messagesRef.current.slice(-14).map(m => ({ role: m.role, content: m.content })),
-            { role: "user", content: msg },
-          ],
+          messages: allMessages,
           systemPrompt: sys,
-          apiKey: key,
+          apiKey: key || undefined,
         }),
       })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}))
+        throw new Error((errData as { error?: string }).error || `HTTP ${res.status}`)
+      }
       const data = await res.json()
       if (data.error) throw new Error(data.error)
       return data.response as string
