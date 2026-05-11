@@ -1,75 +1,55 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
+@import '@fontsource-variable/inter';
 
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  /* Jarvis — dark-only theme, always applied */
-  --background: oklch(0.09 0.008 240);
-  --foreground: oklch(0.95 0.01 220);
-  --card: oklch(0.12 0.01 230);
-  --card-foreground: oklch(0.95 0.01 220);
-  --popover: oklch(0.12 0.01 230);
-  --popover-foreground: oklch(0.95 0.01 220);
-  --primary: oklch(0.72 0.18 210);
-  --primary-foreground: oklch(0.09 0.008 240);
-  --secondary: oklch(0.16 0.012 230);
-  --secondary-foreground: oklch(0.85 0.05 210);
-  --muted: oklch(0.14 0.01 230);
-  --muted-foreground: oklch(0.55 0.04 215);
-  --accent: oklch(0.65 0.22 195);
-  --accent-foreground: oklch(0.09 0.008 240);
-  --destructive: oklch(0.55 0.22 25);
-  --destructive-foreground: oklch(0.95 0.01 220);
-  --border: oklch(0.22 0.03 220);
-  --input: oklch(0.16 0.012 230);
-  --ring: oklch(0.72 0.18 210);
-  --radius: 0.5rem;
-  /* Jarvis custom tokens */
-  --jarvis-blue: oklch(0.72 0.18 210);
-  --jarvis-cyan: oklch(0.75 0.2 195);
-  --jarvis-glow: oklch(0.72 0.18 210 / 0.4);
-  --jarvis-surface: oklch(0.12 0.015 225);
-  --jarvis-border: oklch(0.28 0.05 215);
-  --sidebar: oklch(0.11 0.01 230);
-  --sidebar-foreground: oklch(0.95 0.01 220);
-  --sidebar-primary: oklch(0.72 0.18 210);
-  --sidebar-primary-foreground: oklch(0.09 0.008 240);
-  --sidebar-accent: oklch(0.16 0.012 230);
-  --sidebar-accent-foreground: oklch(0.85 0.05 210);
-  --sidebar-border: oklch(0.22 0.03 220);
-  --sidebar-ring: oklch(0.72 0.18 210);
+  /* DJ Boy — Apple-grade dark system, always dark */
+  --background: #000000;
+  --foreground: rgba(255,255,255,0.95);
+  --card: rgba(255,255,255,0.04);
+  --card-foreground: rgba(255,255,255,0.9);
+  --popover: rgba(20,20,22,0.95);
+  --popover-foreground: rgba(255,255,255,0.9);
+  --primary: #ffffff;
+  --primary-foreground: #000000;
+  --secondary: rgba(255,255,255,0.06);
+  --secondary-foreground: rgba(255,255,255,0.7);
+  --muted: rgba(255,255,255,0.05);
+  --muted-foreground: rgba(255,255,255,0.38);
+  --accent: rgba(255,255,255,0.08);
+  --accent-foreground: rgba(255,255,255,0.9);
+  --destructive: #ff3b30;
+  --destructive-foreground: #ffffff;
+  --border: rgba(255,255,255,0.08);
+  --input: rgba(255,255,255,0.06);
+  --ring: rgba(255,255,255,0.2);
+  --radius: 1rem;
+  /* DJ Boy orb colors */
+  --orb-a: #4f8ef7;
+  --orb-b: #7c5cfc;
+  --orb-c: #2dd4bf;
+  --orb-d: #f0abfc;
+  --glass: rgba(255,255,255,0.05);
+  --glass-border: rgba(255,255,255,0.10);
+  --sidebar: rgba(0,0,0,0.98);
+  --sidebar-foreground: rgba(255,255,255,0.9);
+  --sidebar-primary: #ffffff;
+  --sidebar-primary-foreground: #000000;
+  --sidebar-accent: rgba(255,255,255,0.06);
+  --sidebar-accent-foreground: rgba(255,255,255,0.7);
+  --sidebar-border: rgba(255,255,255,0.08);
+  --sidebar-ring: rgba(255,255,255,0.2);
 }
 
 .dark {
-  --background: oklch(0.09 0.008 240);
-  --foreground: oklch(0.95 0.01 220);
-  --card: oklch(0.12 0.01 230);
-  --card-foreground: oklch(0.95 0.01 220);
-  --popover: oklch(0.12 0.01 230);
-  --popover-foreground: oklch(0.95 0.01 220);
-  --primary: oklch(0.72 0.18 210);
-  --primary-foreground: oklch(0.09 0.008 240);
-  --secondary: oklch(0.16 0.012 230);
-  --secondary-foreground: oklch(0.85 0.05 210);
-  --muted: oklch(0.14 0.01 230);
-  --muted-foreground: oklch(0.55 0.04 215);
-  --accent: oklch(0.65 0.22 195);
-  --accent-foreground: oklch(0.09 0.008 240);
-  --destructive: oklch(0.55 0.22 25);
-  --destructive-foreground: oklch(0.95 0.01 220);
-  --border: oklch(0.22 0.03 220);
-  --input: oklch(0.16 0.012 230);
-  --ring: oklch(0.72 0.18 210);
-  --jarvis-blue: oklch(0.72 0.18 210);
-  --jarvis-cyan: oklch(0.75 0.2 195);
-  --jarvis-glow: oklch(0.72 0.18 210 / 0.4);
-  --jarvis-surface: oklch(0.12 0.015 225);
-  --jarvis-border: oklch(0.28 0.05 215);
+  --background: #000000;
+  --foreground: rgba(255,255,255,0.95);
 }
 
 @theme inline {
-  --font-sans: 'Geist', 'Geist Fallback';
+  --font-sans: 'Inter Variable', 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
   --font-mono: 'Geist Mono', 'Geist Mono Fallback';
   --color-background: var(--background);
   --color-foreground: var(--foreground);

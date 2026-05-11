@@ -1,393 +1,574 @@
 "use client"
 
-import { useState, useCallback, useEffect, useRef } from "react"
+import { useState, useCallback, useRef, useEffect } from "react"
 import { motion, AnimatePresence } from "framer-motion"
-import { Mic, MicOff, AlertCircle } from "lucide-react"
-import { Orb } from "./orb"
-import { ChatMessages, type Message } from "./chat-messages"
-import { InputBar } from "./input-bar"
-import { Header } from "./header"
-import { SettingsPanel, type DJBoySettings, DEFAULT_SYSTEM_PROMPT } from "./settings-panel"
-import { useVoice, type VoiceState } from "@/hooks/use-voice"
+import { Mic, MicOff, Settings, Paperclip, Link2, Send, X, Trash2, Eye, EyeOff, ChevronDown, Plus } from "lucide-react"
+import { FluidOrb, type OrbState } from "./fluid-orb"
+import { useVoice } from "@/hooks/use-voice"
 import { useTTS } from "@/hooks/use-tts"
-import { useMemory } from "@/hooks/use-memory"
+import { useMemory, type MemoryStore, type ProjectContext } from "@/hooks/use-memory"
 
-type OrbState = "idle" | "listening" | "thinking" | "speaking"
+// ─── Types ────────────────────────────────────────────────────────────────────
 
-const DEFAULT_SETTINGS: DJBoySettings = {
+interface Message {
+  id: string
+  role: "user" | "assistant"
+  content: string
+  timestamp: Date
+  attachments?: { type: "file" | "image" | "link"; name: string; url?: string }[]
+}
+
+interface Settings {
+  provider: "deepseek" | "gemini" | "openai" | "anthropic"
+  apiKeys: Record<string, string>
+  ttsProvider: "browser" | "google"
+  googleTTSKey: string
+  micDeviceId: string
+  systemPrompt: string
+}
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const PROVIDERS = [
+  { id: "deepseek",  label: "DeepSeek",  url: "https://api.deepseek.com/v1/chat/completions",                              model: "deepseek-chat",          placeholder: "sk-..." },
+  { id: "gemini",    label: "Gemini",    url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",  model: "gemini-2.0-flash",       placeholder: "AIza..." },
+  { id: "openai",    label: "OpenAI",    url: "https://api.openai.com/v1/chat/completions",                               model: "gpt-4o-mini",            placeholder: "sk-..." },
+  { id: "anthropic", label: "Anthropic", url: "https://api.anthropic.com/v1/messages",                                    model: "claude-3-5-haiku-20241022", placeholder: "sk-ant-..." },
+] as const
+
+const DEFAULT_PROMPT = `Você é DJ Boy, assistente pessoal de alto nível.
+
+COMPORTAMENTO: Direto e conciso — suas respostas são lidas em voz alta. Linguagem natural.
+
+HARDWARE: MacBook Pro 2017, macOS Sequoia via OpenCore. Ferramentas: Gemini CLI, Obsidian, Graphify, v0.
+
+Se não souber algo, pesquise. Confirme antes de executar ações.`
+
+const DEFAULT_SETTINGS: Settings = {
   provider: "deepseek",
   apiKeys: {},
   ttsProvider: "browser",
   googleTTSKey: "",
   micDeviceId: "",
-  systemPrompt: DEFAULT_SYSTEM_PROMPT,
+  systemPrompt: DEFAULT_PROMPT,
 }
 
-function loadSettings(): DJBoySettings {
+const STATE_LABEL: Record<OrbState, string> = {
+  idle:             "Inativo",
+  "wake-listening": 'Aguardando "DJ Boy"',
+  listening:        "Ouvindo...",
+  thinking:         "Processando...",
+  speaking:         "Respondendo",
+}
+
+function loadSettings(): Settings {
   if (typeof window === "undefined") return DEFAULT_SETTINGS
   try {
-    const raw = localStorage.getItem("djboy_settings")
+    const raw = localStorage.getItem("djboy_settings_v2")
     return raw ? { ...DEFAULT_SETTINGS, ...JSON.parse(raw) } : DEFAULT_SETTINGS
-  } catch {
-    return DEFAULT_SETTINGS
-  }
+  } catch { return DEFAULT_SETTINGS }
 }
 
-function voiceStateToOrbState(vs: VoiceState, thinking: boolean, speaking: boolean): OrbState {
-  if (speaking) return "speaking"
-  if (thinking) return "thinking"
-  if (vs === "listening") return "listening"
-  return "idle"
-}
+// ─── Main Shell ───────────────────────────────────────────────────────────────
 
 export function DJBoyShell() {
-  const [messages, setMessages] = useState<Message[]>([])
+  const [messages, setMessages]         = useState<Message[]>([])
+  const [settings, setSettingsState]    = useState<Settings>(DEFAULT_SETTINGS)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [settings, setSettings] = useState<DJBoySettings>(DEFAULT_SETTINGS)
-  const [microphones, setMicrophones] = useState<MediaDeviceInfo[]>([])
-  const [online, setOnline] = useState(true)
-  const [isThinking, setIsThinking] = useState(false)
-  const messagesRef = useRef<Message[]>([])
-  const settingsRef = useRef<DJBoySettings>(DEFAULT_SETTINGS)
+  const [isThinking, setIsThinking]     = useState(false)
+  const [isActive, setIsActive]         = useState(false)
+  const [orbState, setOrbState]         = useState<OrbState>("idle")
+  const [inputText, setInputText]       = useState("")
+  const [attachments, setAttachments]   = useState<Message["attachments"]>([])
+  const [showLink, setShowLink]         = useState(false)
+  const [linkText, setLinkText]         = useState("")
+  const [microphones, setMics]          = useState<MediaDeviceInfo[]>([])
+  const [showChat, setShowChat]         = useState(false)
 
-  // Keep refs in sync for stable callbacks
-  useEffect(() => { messagesRef.current = messages }, [messages])
+  const settingsRef  = useRef(settings)
+  const messagesRef  = useRef(messages)
+  const messagesEnd  = useRef<HTMLDivElement>(null)
+  const fileRef      = useRef<HTMLInputElement>(null)
+  const memory       = useMemory()
+
   useEffect(() => { settingsRef.current = settings }, [settings])
+  useEffect(() => { messagesRef.current = messages }, [messages])
 
   // Load settings on mount
   useEffect(() => {
     const s = loadSettings()
-    setSettings(s)
+    setSettingsState(s)
     settingsRef.current = s
+    navigator.mediaDevices?.enumerateDevices()
+      .then(devs => setMics(devs.filter(d => d.kind === "audioinput")))
+      .catch(() => {})
   }, [])
 
-  // Persist settings
-  useEffect(() => {
-    localStorage.setItem("djboy_settings", JSON.stringify(settings))
-  }, [settings])
-
-  // Online status
-  useEffect(() => {
-    const update = () => setOnline(navigator.onLine)
-    window.addEventListener("online", update)
-    window.addEventListener("offline", update)
-    return () => {
-      window.removeEventListener("online", update)
-      window.removeEventListener("offline", update)
-    }
+  const setSettings = useCallback((s: Settings) => {
+    setSettingsState(s)
+    settingsRef.current = s
+    localStorage.setItem("djboy_settings_v2", JSON.stringify(s))
   }, [])
 
-  // Get microphones after permission
-  useEffect(() => {
-    async function getMics() {
-      try {
-        await navigator.mediaDevices.getUserMedia({ audio: true })
-        const devices = await navigator.mediaDevices.enumerateDevices()
-        setMicrophones(devices.filter((d) => d.kind === "audioinput"))
-      } catch {
-        // permission not yet granted
-      }
-    }
-    getMics()
-  }, [])
+  // Auto-scroll
+  useEffect(() => { messagesEnd.current?.scrollIntoView({ behavior: "smooth" }) }, [messages])
 
-  const callLLM = useCallback(async (content: string, attachments?: Message["attachments"]) => {
+  // ─── LLM call ───────────────────────────────────────────────────────────────
+
+  const callLLM = useCallback(async (content: string, atts?: Message["attachments"]): Promise<string> => {
     const s = settingsRef.current
-    const apiKey = s.apiKeys[s.provider]
+    const key = s.apiKeys[s.provider]
+    if (!key) return `Configure a API key do ${s.provider} nas configurações.`
 
-    if (!apiKey) {
-      return `Nenhuma API key configurada para ${s.provider}. Abra as configurações e adicione sua chave.`
-    }
-
-    // Build memory context block and inject into system prompt
+    const prov = PROVIDERS.find(p => p.id === s.provider)!
     const memCtx = memory.buildContextBlock()
-    const systemWithMemory = memCtx
-      ? `${s.systemPrompt}\n\n---\n## MEMÓRIA E CONTEXTO ATUAL\n${memCtx}`
-      : s.systemPrompt
+    const sys = memCtx ? `${s.systemPrompt}\n\n---\n## MEMÓRIA\n${memCtx}` : s.systemPrompt
 
-    let apiUrl = ""
-    let model = ""
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    }
+    const history = messagesRef.current.slice(-14).map(m => ({ role: m.role, content: m.content }))
+    let msg = content
+    if (atts?.length) msg += "\n\n" + atts.map(a => a.type === "link" ? `[Link: ${a.url}]` : `[${a.name}]`).join("\n")
 
-    if (s.provider === "deepseek") {
-      apiUrl = "https://api.deepseek.com/v1/chat/completions"
-      model = "deepseek-chat"
-    } else if (s.provider === "openai") {
-      apiUrl = "https://api.openai.com/v1/chat/completions"
-      model = "gpt-4o-mini"
-    } else if (s.provider === "gemini") {
-      apiUrl = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-      model = "gemini-2.5-flash"
-    } else if (s.provider === "anthropic") {
-      apiUrl = "https://api.anthropic.com/v1/messages"
-      model = "claude-3-5-haiku-20241022"
+    const headers: Record<string, string> = { "Content-Type": "application/json", Authorization: `Bearer ${key}` }
+    let body: object
+
+    if (s.provider === "anthropic") {
       headers["anthropic-version"] = "2023-06-01"
-      headers["x-api-key"] = apiKey
-      delete headers["Authorization"]
+      headers["x-api-key"] = key
+      delete headers.Authorization
+      body = { model: prov.model, max_tokens: 1024, system: sys, messages: [...history, { role: "user", content: msg }] }
+    } else {
+      body = { model: prov.model, messages: [{ role: "system", content: sys }, ...history, { role: "user", content: msg }], max_tokens: 1024, temperature: 0.7 }
     }
 
-    const history = messagesRef.current.slice(-20).map((m) => ({
-      role: m.role,
-      content: m.content,
-    }))
-
-    // Append attachment context to message
-    let fullContent = content
-    if (attachments?.length) {
-      const attDesc = attachments
-        .map((a) => `[${a.type === "link" ? "Link" : a.type === "image" ? "Imagem" : "Arquivo"}: ${a.name}]`)
-        .join(", ")
-      fullContent = `${content}\n\nAnexos: ${attDesc}`
-    }
-
-    const body =
-      s.provider === "anthropic"
-        ? {
-            model,
-            max_tokens: 1024,
-            system: systemWithMemory,
-            messages: [...history, { role: "user", content: fullContent }],
-          }
-        : {
-            model,
-            messages: [
-              { role: "system", content: systemWithMemory },
-              ...history,
-              { role: "user", content: fullContent },
-            ],
-            max_tokens: 1024,
-            temperature: 0.7,
-          }
-
-    const res = await fetch(apiUrl, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-    })
-
-    if (!res.ok) {
-      const errBody = await res.text().catch(() => "")
-      throw new Error(`API ${res.status}: ${errBody}`)
-    }
-
+    const res = await fetch(prov.url, { method: "POST", headers, body: JSON.stringify(body) })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const data = await res.json()
-    return s.provider === "anthropic"
-      ? (data.content?.[0]?.text ?? "Sem resposta.")
-      : (data.choices?.[0]?.message?.content ?? "Sem resposta.")
-  }, [])
+    return s.provider === "anthropic" ? data.content?.[0]?.text ?? "" : data.choices?.[0]?.message?.content ?? ""
+  }, [memory])
 
-  const memory = useMemory()
+  // ─── TTS ────────────────────────────────────────────────────────────────────
 
   const { speak, stop: stopSpeaking, isSpeaking } = useTTS({
     provider: settings.ttsProvider,
     googleApiKey: settings.googleTTSKey || undefined,
-    onStart: () => {},
-    onEnd: () => {
-      // After speaking, if voice is active go back to wake-listening automatically
-    },
+    lang: "pt-BR",
+    onStart: () => setOrbState("speaking"),
+    onEnd:   () => setOrbState(isActive ? "wake-listening" : "idle"),
   })
 
-  const handleTranscript = useCallback(
-    async (text: string) => {
-      const userMsg: Message = {
-        id: crypto.randomUUID(),
-        role: "user",
-        content: text,
-        timestamp: new Date(),
-      }
-      setMessages((prev) => [...prev, userMsg])
-      memory.addEntry("user", text)
-      setIsThinking(true)
-      try {
-        const reply = await callLLM(text)
-        const assistantMsg: Message = {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: reply,
-          timestamp: new Date(),
-        }
-        setMessages((prev) => [...prev, assistantMsg])
-        memory.addEntry("assistant", reply)
-        speak(reply)
-      } catch {
-        const errMsg: Message = {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: "Erro ao processar. Verifique sua API key e conexão.",
-          timestamp: new Date(),
-        }
-        setMessages((prev) => [...prev, errMsg])
-        speak(errMsg.content)
-      } finally {
-        setIsThinking(false)
-      }
-    },
-    [callLLM, speak, memory]
-  )
+  // ─── Send message ────────────────────────────────────────────────────────────
 
-  const { state: voiceState, audioLevel, error: voiceError, start, stop, pushToTalk } = useVoice({
-    wakeName: "dj boy",
+  const handleSend = useCallback(async (content: string, atts?: Message["attachments"]) => {
+    if (!content.trim() && !atts?.length) return
+    stopSpeaking()
+
+    const userMsg: Message = { id: crypto.randomUUID(), role: "user", content, timestamp: new Date(), attachments: atts }
+    setMessages(prev => [...prev, userMsg])
+    memory.addEntry("user", content)
+    if (!showChat) setShowChat(true)
+    setIsThinking(true)
+    setOrbState("thinking")
+
+    try {
+      const reply = await callLLM(content, atts)
+      const aMsg: Message = { id: crypto.randomUUID(), role: "assistant", content: reply, timestamp: new Date() }
+      setMessages(prev => [...prev, aMsg])
+      memory.addEntry("assistant", reply)
+      speak(reply)
+    } catch {
+      const errMsg: Message = { id: crypto.randomUUID(), role: "assistant", content: "Erro ao processar. Verifique sua API key.", timestamp: new Date() }
+      setMessages(prev => [...prev, errMsg])
+    } finally {
+      setIsThinking(false)
+    }
+  }, [callLLM, speak, stopSpeaking, memory, showChat])
+
+  // ─── Voice ──────────────────────────────────────────────────────────────────
+
+  const { audioLevel, error: voiceError, start, stop } = useVoice({
+    wakeName:    "dj boy",
     micDeviceId: settings.micDeviceId || undefined,
-    silenceMs: 1400,
-    onTranscript: handleTranscript,
+    lang:        "pt-BR",
+    silenceMs:   1400,
+    onTranscript: text => handleSend(text),
+    onStateChange: vs => {
+      if (vs === "listening")           setOrbState("listening")
+      else if (vs === "wake-listening") setOrbState("wake-listening")
+    },
   })
 
-  const orbState = voiceStateToOrbState(voiceState, isThinking, isSpeaking)
+  const toggleVoice = useCallback(async () => {
+    if (isActive) {
+      stop(); stopSpeaking(); setIsActive(false); setOrbState("idle")
+    } else {
+      setIsActive(true); setOrbState("wake-listening"); await start()
+    }
+  }, [isActive, start, stop, stopSpeaking])
 
-  const handleSend = useCallback(
-    async (content: string, attachments?: Message["attachments"]) => {
-      if (!content.trim() && !attachments?.length) return
-      stopSpeaking()
-      const userMsg: Message = {
-        id: crypto.randomUUID(),
-        role: "user",
-        content,
-        timestamp: new Date(),
-        attachments,
-      }
-      setMessages((prev) => [...prev, userMsg])
-      memory.addEntry("user", content)
-      setIsThinking(true)
-      try {
-        const reply = await callLLM(content, attachments)
-        const assistantMsg: Message = {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: reply,
-          timestamp: new Date(),
-        }
-        setMessages((prev) => [...prev, assistantMsg])
-        memory.addEntry("assistant", reply)
-        speak(reply)
-      } catch {
-        const errMsg: Message = {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: "Erro ao processar. Verifique sua API key e conexão.",
-          timestamp: new Date(),
-        }
-        setMessages((prev) => [...prev, errMsg])
-        speak(errMsg.content)
-      } finally {
-        setIsThinking(false)
-      }
-    },
-    [callLLM, speak, stopSpeaking, memory]
-  )
+  // ─── Input helpers ───────────────────────────────────────────────────────────
 
-  const isVoiceActive = voiceState !== "idle"
+  const handleTextSend = useCallback(() => {
+    if (!inputText.trim() && !attachments?.length) return
+    handleSend(inputText, attachments)
+    setInputText("")
+    setAttachments([])
+  }, [inputText, attachments, handleSend])
+
+  const handleFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? [])
+    setAttachments(prev => [
+      ...(prev ?? []),
+      ...files.map(f => ({ type: f.type.startsWith("image/") ? "image" as const : "file" as const, name: f.name }))
+    ])
+    e.target.value = ""
+  }, [])
+
+  const addLink = useCallback(() => {
+    if (!linkText.trim()) return
+    setAttachments(prev => [...(prev ?? []), { type: "link", name: linkText, url: linkText }])
+    setLinkText(""); setShowLink(false)
+  }, [linkText])
+
+  const effectiveOrb: OrbState = isThinking ? "thinking" : isSpeaking ? "speaking" : orbState
+
+  // ─── Render ──────────────────────────────────────────────────────────────────
 
   return (
-    <div
-      className="h-screen w-screen flex flex-col overflow-hidden select-none"
-      style={{ background: "oklch(0.07 0.01 230)" }}
-    >
-      {/* Background grid */}
-      <div
-        className="fixed inset-0 pointer-events-none"
-        style={{
-          backgroundImage:
-            "linear-gradient(oklch(0.22 0.04 215 / 0.03) 1px, transparent 1px), linear-gradient(90deg, oklch(0.22 0.04 215 / 0.03) 1px, transparent 1px)",
-          backgroundSize: "48px 48px",
+    <div className="relative flex flex-col h-screen w-full overflow-hidden font-sans" style={{ background: "#000" }}>
+
+      {/* Ambient glow */}
+      <motion.div
+        className="pointer-events-none absolute rounded-full blur-[120px]"
+        style={{ width: 500, height: 500, top: "50%", left: "50%", x: "-50%", y: "-60%", zIndex: 0 }}
+        animate={{
+          background: effectiveOrb === "speaking"  ? "radial-gradient(circle, rgba(232,121,249,0.14) 0%, rgba(124,92,252,0.08) 50%, transparent 70%)"
+                    : effectiveOrb === "listening" ? "radial-gradient(circle, rgba(52,211,153,0.14) 0%, rgba(16,185,129,0.07) 50%, transparent 70%)"
+                    : effectiveOrb === "thinking"  ? "radial-gradient(circle, rgba(245,158,11,0.12) 0%, rgba(217,119,6,0.06) 50%, transparent 70%)"
+                    : "radial-gradient(circle, rgba(94,106,210,0.12) 0%, rgba(124,92,252,0.06) 50%, transparent 70%)",
+          scale: effectiveOrb === "idle" ? [1, 1.04, 1] : [1, 1.12, 1],
         }}
+        transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
       />
 
-      <Header
-        online={online}
-        onSettings={() => setSettingsOpen(true)}
-        onClear={() => { setMessages([]); stopSpeaking() }}
-      />
-
-      <main className="flex-1 flex flex-col min-h-0">
-        {/* Orb + voice controls */}
-        <div className="flex flex-col items-center gap-4 py-4">
-          <button
-            onClick={isVoiceActive ? pushToTalk : start}
-            className="focus:outline-none"
-            aria-label="Pressionar para falar"
-          >
-            <Orb state={orbState} audioLevel={audioLevel} />
-          </button>
-
-          {/* Wake word hint / active indicator */}
-          <AnimatePresence mode="wait">
-            {voiceState === "wake-listening" && (
-              <motion.div
-                key="wake"
-                initial={{ opacity: 0, y: 4 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -4 }}
-                className="flex items-center gap-2"
-              >
-                <span
-                  className="text-xs font-mono tracking-widest"
-                  style={{ color: "oklch(0.38 0.04 215)" }}
-                >
-                  Aguardando &quot;DJ Boy&quot;...
-                </span>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Voice toggle button */}
-          <div className="flex items-center gap-3">
-            <button
-              onClick={isVoiceActive ? stop : start}
-              className="flex items-center gap-2 px-4 py-2 rounded-full text-xs font-mono tracking-wide transition-all"
-              style={{
-                background: isVoiceActive
-                  ? "oklch(0.72 0.18 210 / 0.15)"
-                  : "oklch(0.14 0.015 225)",
-                border: isVoiceActive
-                  ? "1px solid oklch(0.72 0.18 210 / 0.4)"
-                  : "1px solid oklch(0.25 0.04 215)",
-                color: isVoiceActive ? "oklch(0.72 0.18 210)" : "oklch(0.5 0.04 215)",
-              }}
-            >
-              {isVoiceActive ? <Mic size={12} /> : <MicOff size={12} />}
-              {isVoiceActive ? "Voz ativa" : "Ativar voz"}
-            </button>
-          </div>
-
-          {/* Error banner */}
-          <AnimatePresence>
-            {voiceError && (
-              <motion.div
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.95 }}
-                className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs"
-                style={{
-                  background: "oklch(0.55 0.22 25 / 0.1)",
-                  border: "1px solid oklch(0.55 0.22 25 / 0.3)",
-                  color: "oklch(0.7 0.18 25)",
-                }}
-              >
-                <AlertCircle size={12} />
-                {voiceError}
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
-
-        {/* Chat area */}
-        <div className="flex-1 flex flex-col min-h-0 relative">
-          <div
-            className="absolute top-0 left-0 right-0 h-8 pointer-events-none z-10"
-            style={{
-              background: "linear-gradient(to bottom, oklch(0.07 0.01 230), transparent)",
-            }}
+      {/* ── Top bar ─────────────────────────────────────────────────────── */}
+      <header className="relative z-10 flex items-center justify-between px-6 py-5">
+        <div className="flex items-center gap-2.5">
+          <motion.div
+            className="w-1.5 h-1.5 rounded-full"
+            style={{ background: isActive ? "#34d399" : "rgba(255,255,255,0.2)" }}
+            animate={isActive ? { opacity: [1, 0.35, 1] } : { opacity: 0.5 }}
+            transition={{ duration: 1.6, repeat: Infinity }}
           />
-          <ChatMessages messages={messages} />
+          <span className="text-[11px] font-medium tracking-[0.14em] uppercase" style={{ color: "rgba(255,255,255,0.32)" }}>
+            {isActive ? "Ativo" : "Offline"}
+          </span>
         </div>
 
-        <InputBar onSend={handleSend} disabled={isThinking} />
+        <span className="text-[13px] font-semibold tracking-[0.28em] uppercase" style={{ color: "rgba(255,255,255,0.45)" }}>
+          DJ&nbsp;BOY
+        </span>
+
+        <div className="flex items-center gap-1">
+          {messages.length > 0 && (
+            <motion.button
+              onClick={() => { setMessages([]); setShowChat(false); stopSpeaking() }}
+              className="w-8 h-8 flex items-center justify-center rounded-full transition-colors hover:bg-white/5"
+              style={{ color: "rgba(255,255,255,0.28)" }}
+              whileTap={{ scale: 0.9 }}
+              aria-label="Limpar"
+            >
+              <Trash2 size={14} />
+            </motion.button>
+          )}
+          <motion.button
+            onClick={() => setSettingsOpen(true)}
+            className="w-8 h-8 flex items-center justify-center rounded-full transition-colors hover:bg-white/5"
+            style={{ color: "rgba(255,255,255,0.28)" }}
+            whileTap={{ scale: 0.9 }}
+            aria-label="Configurações"
+          >
+            <Settings size={14} />
+          </motion.button>
+        </div>
+      </header>
+
+      {/* ── Main content ────────────────────────────────────────────────── */}
+      <main className="relative z-10 flex-1 flex flex-col items-center overflow-hidden">
+
+        {/* Orb area */}
+        <AnimatePresence mode="wait">
+          {!showChat ? (
+            <motion.div
+              key="full"
+              className="flex flex-col items-center gap-7 mt-8"
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: -20 }}
+              transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
+            >
+              <motion.button
+                onClick={toggleVoice}
+                className="relative rounded-full outline-none focus-visible:ring-2 focus-visible:ring-white/20"
+                whileTap={{ scale: 0.95 }}
+                aria-label={isActive ? "Pausar" : "Ativar DJ Boy"}
+              >
+                {/* Pulse ring when active */}
+                {isActive && (
+                  <motion.div
+                    className="absolute inset-0 rounded-full border border-white/10"
+                    animate={{ scale: [1, 1.18, 1], opacity: [0.5, 0, 0.5] }}
+                    transition={{ duration: 2.4, repeat: Infinity, ease: "easeInOut" }}
+                  />
+                )}
+                <FluidOrb state={effectiveOrb} audioLevel={audioLevel} size={248} />
+              </motion.button>
+
+              {/* Status label */}
+              <div className="flex flex-col items-center gap-4">
+                <AnimatePresence mode="wait">
+                  <motion.p
+                    key={effectiveOrb}
+                    initial={{ opacity: 0, y: 5 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -5 }}
+                    transition={{ duration: 0.25 }}
+                    className="text-[13px] font-medium tracking-wide"
+                    style={{ color: "rgba(255,255,255,0.42)" }}
+                  >
+                    {STATE_LABEL[effectiveOrb]}
+                  </motion.p>
+                </AnimatePresence>
+
+                <motion.button
+                  onClick={toggleVoice}
+                  className="flex items-center gap-2 px-5 py-2.5 rounded-full text-[13px] font-medium transition-all"
+                  style={{
+                    background: isActive ? "rgba(255,255,255,0.07)" : "rgba(255,255,255,0.05)",
+                    border: "1px solid rgba(255,255,255,0.10)",
+                    color: isActive ? "rgba(255,255,255,0.85)" : "rgba(255,255,255,0.45)",
+                    backdropFilter: "blur(20px)",
+                  }}
+                  whileHover={{ background: "rgba(255,255,255,0.09)" }}
+                  whileTap={{ scale: 0.95 }}
+                >
+                  {isActive ? <Mic size={13} /> : <MicOff size={13} />}
+                  {isActive ? "Ouvindo — toque para pausar" : "Ativar voz"}
+                </motion.button>
+
+                {voiceError && (
+                  <p className="text-xs" style={{ color: "#ff453a" }}>{voiceError}</p>
+                )}
+              </div>
+            </motion.div>
+          ) : (
+            <motion.div
+              key="mini"
+              className="flex flex-col items-center gap-2 pt-2 pb-1"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.35 }}
+            >
+              <motion.button onClick={toggleVoice} whileTap={{ scale: 0.94 }} aria-label="Toggle voz">
+                <FluidOrb state={effectiveOrb} audioLevel={audioLevel} size={76} />
+              </motion.button>
+              <p className="text-[10px] tracking-[0.18em] uppercase font-medium" style={{ color: "rgba(255,255,255,0.25)" }}>
+                {STATE_LABEL[effectiveOrb]}
+              </p>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Chat messages */}
+        <AnimatePresence>
+          {showChat && (
+            <motion.div
+              className="w-full max-w-[680px] flex-1 overflow-y-auto px-5 pb-3 pt-2 space-y-2.5"
+              style={{ scrollbarWidth: "none" }}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.35, delay: 0.1 }}
+            >
+              {messages.map((msg) => (
+                <motion.div
+                  key={msg.id}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+                  className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+                >
+                  <div
+                    className="max-w-[76%] px-4 py-3 text-[14px] leading-relaxed"
+                    style={msg.role === "user" ? {
+                      background: "rgba(255,255,255,0.09)",
+                      border: "1px solid rgba(255,255,255,0.10)",
+                      color: "rgba(255,255,255,0.90)",
+                      borderRadius: "18px 18px 4px 18px",
+                      backdropFilter: "blur(16px)",
+                    } : {
+                      background: "rgba(255,255,255,0.03)",
+                      border: "1px solid rgba(255,255,255,0.06)",
+                      color: "rgba(255,255,255,0.72)",
+                      borderRadius: "18px 18px 18px 4px",
+                      backdropFilter: "blur(16px)",
+                    }}
+                  >
+                    {msg.content}
+                    {msg.attachments?.map((a, i) => (
+                      <span key={i} className="block mt-1 text-[11px]" style={{ color: "rgba(255,255,255,0.35)" }}>
+                        {a.type === "link" ? "↗" : "⊕"} {a.name}
+                      </span>
+                    ))}
+                  </div>
+                </motion.div>
+              ))}
+
+              {/* Thinking indicator */}
+              <AnimatePresence>
+                {isThinking && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0 }}
+                    className="flex justify-start"
+                  >
+                    <div
+                      className="px-4 py-3 flex gap-1.5 items-center"
+                      style={{
+                        background: "rgba(255,255,255,0.03)",
+                        border: "1px solid rgba(255,255,255,0.06)",
+                        borderRadius: "18px 18px 18px 4px",
+                      }}
+                    >
+                      {[0, 1, 2].map(i => (
+                        <motion.div
+                          key={i}
+                          className="w-1.5 h-1.5 rounded-full"
+                          style={{ background: "rgba(255,255,255,0.45)" }}
+                          animate={{ opacity: [0.25, 1, 0.25], scale: [0.7, 1, 0.7] }}
+                          transition={{ duration: 0.85, repeat: Infinity, delay: i * 0.18 }}
+                        />
+                      ))}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+              <div ref={messagesEnd} />
+            </motion.div>
+          )}
+        </AnimatePresence>
       </main>
 
-      <SettingsPanel
+      {/* ── Input bar ──────────────────────────────────────────────────────── */}
+      <div className="relative z-10 px-4 pb-6 pt-2 w-full max-w-[680px] mx-auto">
+        {/* Attachments */}
+        <AnimatePresence>
+          {!!attachments?.length && (
+            <motion.div
+              className="flex flex-wrap gap-1.5 mb-2 px-1"
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+            >
+              {attachments.map((a, i) => (
+                <div
+                  key={i}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px]"
+                  style={{ background: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.65)", border: "1px solid rgba(255,255,255,0.09)" }}
+                >
+                  {a.name.length > 22 ? a.name.slice(0, 22) + "…" : a.name}
+                  <button onClick={() => setAttachments(prev => prev?.filter((_, j) => j !== i))} aria-label="Remover">
+                    <X size={10} />
+                  </button>
+                </div>
+              ))}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Link input */}
+        <AnimatePresence>
+          {showLink && (
+            <motion.div
+              className="flex gap-2 mb-2"
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+            >
+              <input
+                value={linkText}
+                onChange={e => setLinkText(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && addLink()}
+                placeholder="Cole o link..."
+                autoFocus
+                className="flex-1 px-4 py-2.5 rounded-full text-[13px] outline-none"
+                style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.09)", color: "rgba(255,255,255,0.85)" }}
+              />
+              <button
+                onClick={addLink}
+                className="px-4 py-2 rounded-full text-[12px] font-medium"
+                style={{ background: "rgba(255,255,255,0.09)", color: "rgba(255,255,255,0.85)" }}
+              >
+                OK
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Main input */}
+        <div
+          className="flex items-center gap-2 px-4 py-3.5 rounded-2xl"
+          style={{
+            background: "rgba(255,255,255,0.045)",
+            border: "1px solid rgba(255,255,255,0.09)",
+            backdropFilter: "blur(28px)",
+          }}
+        >
+          <input type="file" ref={fileRef} onChange={handleFile} multiple className="hidden" />
+          <button
+            onClick={() => fileRef.current?.click()}
+            className="w-7 h-7 flex items-center justify-center rounded-full hover:bg-white/5 transition-colors"
+            style={{ color: "rgba(255,255,255,0.28)" }}
+            aria-label="Anexar"
+          >
+            <Paperclip size={15} />
+          </button>
+          <button
+            onClick={() => setShowLink(v => !v)}
+            className="w-7 h-7 flex items-center justify-center rounded-full hover:bg-white/5 transition-colors"
+            style={{ color: "rgba(255,255,255,0.28)" }}
+            aria-label="Link"
+          >
+            <Link2 size={15} />
+          </button>
+          <input
+            value={inputText}
+            onChange={e => setInputText(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleTextSend() } }}
+            placeholder='Digite ou diga "DJ Boy"...'
+            className="flex-1 bg-transparent outline-none text-[14px]"
+            style={{ color: "rgba(255,255,255,0.85)", caretColor: "white" }}
+          />
+          <motion.button
+            onClick={handleTextSend}
+            className="w-7 h-7 flex items-center justify-center rounded-full transition-colors"
+            style={{
+              background: (inputText.trim() || !!attachments?.length) ? "rgba(255,255,255,0.14)" : "transparent",
+              color: (inputText.trim() || !!attachments?.length) ? "rgba(255,255,255,0.9)" : "rgba(255,255,255,0.2)",
+            }}
+            whileTap={{ scale: 0.88 }}
+            aria-label="Enviar"
+          >
+            <Send size={14} />
+          </motion.button>
+        </div>
+
+        <p className="text-center text-[11px] mt-2.5" style={{ color: "rgba(255,255,255,0.14)" }}>
+          DJ Boy pode cometer erros — verifique informações críticas
+        </p>
+      </div>
+
+      {/* ── Settings Panel ─────────────────────────────────────────────────── */}
+      <SettingsDrawer
         open={settingsOpen}
         settings={settings}
         onChange={setSettings}
@@ -396,11 +577,310 @@ export function DJBoyShell() {
         memoryStore={memory.getStore()}
         onUpdateNotes={memory.updateNotes}
         onUpsertProject={memory.upsertProject}
-        onClearMemory={() => {
-          localStorage.removeItem("djboy_memory")
-          window.location.reload()
-        }}
+        onClearMemory={() => { localStorage.removeItem("djboy_memory"); window.location.reload() }}
       />
     </div>
+  )
+}
+
+// ─── Settings Drawer ──────────────────────────────────────────────────────────
+
+interface SettingsDrawerProps {
+  open: boolean
+  settings: Settings
+  onChange: (s: Settings) => void
+  onClose: () => void
+  microphones: MediaDeviceInfo[]
+  memoryStore?: MemoryStore
+  onUpdateNotes?: (v: string) => void
+  onUpsertProject?: (p: ProjectContext) => void
+  onClearMemory?: () => void
+}
+
+type Tab = "ai" | "voice" | "prompt" | "memory"
+
+const TABS: { id: Tab; label: string }[] = [
+  { id: "ai",     label: "IA & API" },
+  { id: "voice",  label: "Voz" },
+  { id: "prompt", label: "Prompt" },
+  { id: "memory", label: "Memória" },
+]
+
+function SettingsDrawer({ open, settings, onChange, onClose, microphones, memoryStore, onUpdateNotes, onUpsertProject, onClearMemory }: SettingsDrawerProps) {
+  const [tab, setTab]         = useState<Tab>("ai")
+  const [showKeys, setShowKeys] = useState<Record<string, boolean>>({})
+  const [notes, setNotes]     = useState(memoryStore?.persistentNotes ?? "")
+  const [newProj, setNewProj] = useState<Partial<ProjectContext>>({})
+
+  useEffect(() => { setNotes(memoryStore?.persistentNotes ?? "") }, [memoryStore?.persistentNotes])
+
+  const glass = {
+    background: "rgba(12,12,14,0.92)",
+    border: "1px solid rgba(255,255,255,0.08)",
+    backdropFilter: "blur(40px)",
+  }
+
+  const inputStyle = {
+    background: "rgba(255,255,255,0.04)",
+    border: "1px solid rgba(255,255,255,0.08)",
+    color: "rgba(255,255,255,0.85)",
+    borderRadius: "10px",
+  }
+
+  const label = (text: string) => (
+    <p className="text-[10px] font-semibold tracking-[0.15em] uppercase mb-2" style={{ color: "rgba(255,255,255,0.3)" }}>
+      {text}
+    </p>
+  )
+
+  return (
+    <AnimatePresence>
+      {open && (
+        <>
+          {/* Backdrop */}
+          <motion.div
+            className="fixed inset-0 z-40"
+            style={{ background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)" }}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={onClose}
+          />
+
+          {/* Panel */}
+          <motion.div
+            className="fixed right-0 top-0 bottom-0 z-50 w-full max-w-[400px] flex flex-col overflow-hidden"
+            style={glass}
+            initial={{ x: "100%" }}
+            animate={{ x: 0 }}
+            exit={{ x: "100%" }}
+            transition={{ type: "spring", damping: 32, stiffness: 280 }}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-5" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+              <p className="text-[14px] font-semibold" style={{ color: "rgba(255,255,255,0.85)" }}>Configurações</p>
+              <button onClick={onClose} className="w-7 h-7 flex items-center justify-center rounded-full hover:bg-white/5 transition-colors" style={{ color: "rgba(255,255,255,0.4)" }}>
+                <X size={15} />
+              </button>
+            </div>
+
+            {/* Tabs */}
+            <div className="flex px-4 pt-4 pb-2 gap-1">
+              {TABS.map(t => (
+                <button
+                  key={t.id}
+                  onClick={() => setTab(t.id)}
+                  className="flex-1 py-1.5 rounded-lg text-[11px] font-medium tracking-wide transition-all"
+                  style={{
+                    background: tab === t.id ? "rgba(255,255,255,0.09)" : "transparent",
+                    color: tab === t.id ? "rgba(255,255,255,0.85)" : "rgba(255,255,255,0.32)",
+                    border: tab === t.id ? "1px solid rgba(255,255,255,0.10)" : "1px solid transparent",
+                  }}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Content */}
+            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5" style={{ scrollbarWidth: "none" }}>
+
+              {/* ── AI & API ── */}
+              {tab === "ai" && (
+                <>
+                  {label("Provider")}
+                  <div className="grid grid-cols-2 gap-2 mb-5">
+                    {PROVIDERS.map(p => (
+                      <button
+                        key={p.id}
+                        onClick={() => onChange({ ...settings, provider: p.id as Settings["provider"] })}
+                        className="py-2.5 rounded-xl text-[12px] font-medium transition-all"
+                        style={{
+                          background: settings.provider === p.id ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.03)",
+                          border: settings.provider === p.id ? "1px solid rgba(255,255,255,0.16)" : "1px solid rgba(255,255,255,0.06)",
+                          color: settings.provider === p.id ? "rgba(255,255,255,0.9)" : "rgba(255,255,255,0.4)",
+                        }}
+                      >
+                        {p.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {label("API Keys")}
+                  <div className="space-y-3">
+                    {PROVIDERS.map(p => (
+                      <div key={p.id}>
+                        <p className="text-[11px] mb-1.5" style={{ color: "rgba(255,255,255,0.4)" }}>{p.label}</p>
+                        <div className="flex gap-2">
+                          <input
+                            type={showKeys[p.id] ? "text" : "password"}
+                            placeholder={p.placeholder}
+                            value={settings.apiKeys[p.id] ?? ""}
+                            onChange={e => onChange({ ...settings, apiKeys: { ...settings.apiKeys, [p.id]: e.target.value } })}
+                            className="flex-1 px-3 py-2 text-[12px] outline-none font-mono"
+                            style={inputStyle}
+                          />
+                          <button
+                            onClick={() => setShowKeys(prev => ({ ...prev, [p.id]: !prev[p.id] }))}
+                            className="w-9 flex items-center justify-center rounded-xl"
+                            style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.35)" }}
+                          >
+                            {showKeys[p.id] ? <EyeOff size={13} /> : <Eye size={13} />}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {/* ── Voice ── */}
+              {tab === "voice" && (
+                <>
+                  {label("Motor TTS")}
+                  <div className="grid grid-cols-2 gap-2 mb-5">
+                    {[{ id: "browser", label: "Navegador" }, { id: "google", label: "Google Neural" }].map(e => (
+                      <button
+                        key={e.id}
+                        onClick={() => onChange({ ...settings, ttsProvider: e.id as Settings["ttsProvider"] })}
+                        className="py-2.5 rounded-xl text-[12px] font-medium transition-all"
+                        style={{
+                          background: settings.ttsProvider === e.id ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.03)",
+                          border: settings.ttsProvider === e.id ? "1px solid rgba(255,255,255,0.16)" : "1px solid rgba(255,255,255,0.06)",
+                          color: settings.ttsProvider === e.id ? "rgba(255,255,255,0.9)" : "rgba(255,255,255,0.4)",
+                        }}
+                      >
+                        {e.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {settings.ttsProvider === "google" && (
+                    <>
+                      {label("Google TTS API Key")}
+                      <input
+                        type="password"
+                        placeholder="AIza..."
+                        value={settings.googleTTSKey}
+                        onChange={e => onChange({ ...settings, googleTTSKey: e.target.value })}
+                        className="w-full px-3 py-2.5 text-[12px] outline-none font-mono mb-4"
+                        style={inputStyle}
+                      />
+                    </>
+                  )}
+
+                  {label("Microfone")}
+                  <div className="relative">
+                    <select
+                      value={settings.micDeviceId}
+                      onChange={e => onChange({ ...settings, micDeviceId: e.target.value })}
+                      className="w-full px-3 py-2.5 text-[12px] outline-none appearance-none pr-8"
+                      style={{ ...inputStyle, borderRadius: "10px" }}
+                    >
+                      <option value="">Padrão do sistema</option>
+                      {microphones.map(m => (
+                        <option key={m.deviceId} value={m.deviceId}>{m.label || `Mic ${m.deviceId.slice(0, 8)}`}</option>
+                      ))}
+                    </select>
+                    <ChevronDown size={13} className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: "rgba(255,255,255,0.3)" }} />
+                  </div>
+                </>
+              )}
+
+              {/* ── Prompt ── */}
+              {tab === "prompt" && (
+                <>
+                  {label("System Prompt")}
+                  <textarea
+                    value={settings.systemPrompt}
+                    onChange={e => onChange({ ...settings, systemPrompt: e.target.value })}
+                    rows={18}
+                    className="w-full px-3 py-2.5 text-[12px] outline-none font-mono resize-none leading-relaxed"
+                    style={inputStyle}
+                  />
+                  <button
+                    onClick={() => onChange({ ...settings, systemPrompt: DEFAULT_PROMPT })}
+                    className="text-[11px] hover:opacity-60 transition-opacity"
+                    style={{ color: "rgba(255,255,255,0.3)" }}
+                  >
+                    Restaurar padrão
+                  </button>
+                </>
+              )}
+
+              {/* ── Memory ── */}
+              {tab === "memory" && (
+                <>
+                  <div className="flex items-center justify-between mb-3">
+                    {label("Projetos")}
+                    {onClearMemory && (
+                      <button onClick={onClearMemory} className="text-[10px] flex items-center gap-1 hover:opacity-60 transition-opacity" style={{ color: "rgba(255,59,48,0.7)" }}>
+                        <Trash2 size={10} /> Limpar tudo
+                      </button>
+                    )}
+                  </div>
+
+                  {memoryStore?.projects.map((p, i) => (
+                    <div key={i} className="p-3 rounded-xl mb-2 text-[12px]" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                      <p className="font-medium mb-0.5" style={{ color: "rgba(255,255,255,0.8)" }}>{p.name}</p>
+                      <p style={{ color: "rgba(255,255,255,0.4)" }}>{p.description}</p>
+                      {p.tech.length > 0 && <p className="mt-1 font-mono text-[10px]" style={{ color: "rgba(255,255,255,0.28)" }}>{p.tech.join(", ")}</p>}
+                    </div>
+                  ))}
+
+                  {/* Add project */}
+                  <div className="p-3 rounded-xl flex flex-col gap-2 mb-5" style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                    <p className="text-[10px]" style={{ color: "rgba(255,255,255,0.28)" }}>Adicionar projeto</p>
+                    {(["name", "description", "tech"] as const).map(f => (
+                      <input
+                        key={f}
+                        placeholder={f === "name" ? "Nome" : f === "description" ? "Descrição" : "Tech (React, Python...)"}
+                        value={(newProj[f] as string) ?? ""}
+                        onChange={e => setNewProj(prev => ({ ...prev, [f]: e.target.value }))}
+                        className="w-full px-3 py-2 text-[12px] outline-none"
+                        style={inputStyle}
+                      />
+                    ))}
+                    <button
+                      onClick={() => {
+                        if (!newProj.name) return
+                        onUpsertProject?.({ name: newProj.name!, description: newProj.description ?? "", tech: (newProj.tech ?? "").split(",").map(t => t.trim()).filter(Boolean), notes: "", lastUpdated: new Date().toISOString() })
+                        setNewProj({})
+                      }}
+                      className="flex items-center justify-center gap-1 py-2 rounded-xl text-[12px] font-medium transition-all"
+                      style={{ background: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.75)", border: "1px solid rgba(255,255,255,0.09)" }}
+                    >
+                      <Plus size={12} /> Adicionar
+                    </button>
+                  </div>
+
+                  {label("Notas permanentes")}
+                  <textarea
+                    value={notes}
+                    onChange={e => setNotes(e.target.value)}
+                    onBlur={() => onUpdateNotes?.(notes)}
+                    rows={6}
+                    placeholder="Preferências, contexto pessoal, informações fixas..."
+                    className="w-full px-3 py-2.5 text-[12px] outline-none font-mono resize-none leading-relaxed mb-5"
+                    style={inputStyle}
+                  />
+
+                  {label("Histórico diário")}
+                  {memoryStore?.dailyMemories.slice(0, 5).map(d => (
+                    <div key={d.date} className="mb-2 p-2.5 rounded-xl text-[11px]" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.05)" }}>
+                      <div className="flex justify-between"><span style={{ color: "rgba(255,255,255,0.35)" }}>{d.date}</span><span style={{ color: "rgba(255,255,255,0.2)" }}>{d.entries.length} msgs</span></div>
+                      {d.summary && <p className="mt-1" style={{ color: "rgba(255,255,255,0.42)" }}>{d.summary}</p>}
+                    </div>
+                  ))}
+                  {!memoryStore?.dailyMemories.length && (
+                    <p className="text-[11px]" style={{ color: "rgba(255,255,255,0.2)" }}>Nenhum histórico ainda.</p>
+                  )}
+                </>
+              )}
+            </div>
+          </motion.div>
+        </>
+      )}
+    </AnimatePresence>
   )
 }
