@@ -89,6 +89,10 @@ export function DJBoyShell() {
   const [linkText, setLinkText]         = useState("")
   const [microphones, setMics]          = useState<MediaDeviceInfo[]>([])
   const [showChat, setShowChat]         = useState(false)
+  
+  // Demo mode for testing without microphone
+  const [demoMode, setDemoMode]           = useState(false)
+  const [demoAudioLevel, setDemoAudioLevel] = useState(0)
 
   const settingsRef  = useRef(settings)
   const messagesRef  = useRef(messages)
@@ -202,13 +206,46 @@ export function DJBoyShell() {
     },
   })
 
-  const toggleVoice = useCallback(async () => {
-    if (isActive) {
-      stop(); stopSpeaking(); setIsActive(false); setOrbState("idle")
-    } else {
-      setIsActive(true); setOrbState("wake-listening"); await start()
-    }
-  }, [isActive, start, stop, stopSpeaking])
+const toggleVoice = useCallback(async () => {
+  console.log("[v0] toggleVoice chamado, isActive:", isActive)
+  if (isActive) {
+    console.log("[v0] Parando voz...")
+    stop(); stopSpeaking(); setIsActive(false); setOrbState("idle")
+  } else {
+    console.log("[v0] Iniciando voz...")
+    setIsActive(true); setOrbState("wake-listening"); await start()
+    console.log("[v0] start() retornou")
+  }
+}, [isActive, start, stop, stopSpeaking])
+
+// Demo mode effect - simulates audio levels and cycles through states
+useEffect(() => {
+  if (!demoMode) return
+  
+  let frame = 0
+  const states: OrbState[] = ["idle", "wake-listening", "listening", "thinking", "speaking"]
+  let stateIndex = 0
+  
+  // Cycle states every 3 seconds
+  const stateInterval = setInterval(() => {
+    stateIndex = (stateIndex + 1) % states.length
+    setOrbState(states[stateIndex])
+    setIsActive(stateIndex > 0)
+  }, 3000)
+  
+  // Simulate audio levels with some variation
+  const audioInterval = setInterval(() => {
+    frame++
+    const base = 0.3 + 0.2 * Math.sin(frame * 0.1)
+    const noise = Math.random() * 0.4
+    setDemoAudioLevel(Math.min(1, base + noise))
+  }, 50)
+  
+  return () => {
+    clearInterval(stateInterval)
+    clearInterval(audioInterval)
+  }
+}, [demoMode])
 
   // ─── Input helpers ───────────────────────────────────────────────────────────
 
@@ -288,12 +325,26 @@ export function DJBoyShell() {
               <Trash2 size={14} />
             </motion.button>
           )}
-          <motion.button
-            onClick={() => setSettingsOpen(true)}
-            className="w-8 h-8 flex items-center justify-center rounded-full transition-colors hover:bg-white/5"
-            style={{ color: "rgba(255,255,255,0.28)" }}
-            whileTap={{ scale: 0.9 }}
-            aria-label="Configurações"
+  {/* Demo mode toggle */}
+  <motion.button
+    onClick={() => setDemoMode(d => !d)}
+    className="px-2.5 py-1 text-[11px] font-medium rounded-full transition-colors"
+    style={{
+      background: demoMode ? "rgba(52,211,153,0.2)" : "transparent",
+      color: demoMode ? "#34d399" : "rgba(255,255,255,0.28)",
+      border: demoMode ? "1px solid rgba(52,211,153,0.3)" : "1px solid transparent",
+    }}
+    whileTap={{ scale: 0.95 }}
+    aria-label="Toggle Demo Mode"
+  >
+    {demoMode ? "DEMO ON" : "DEMO"}
+  </motion.button>
+  <motion.button
+    onClick={() => setSettingsOpen(true)}
+    className="w-8 h-8 flex items-center justify-center rounded-full transition-colors hover:bg-white/5"
+    style={{ color: "rgba(255,255,255,0.28)" }}
+    whileTap={{ scale: 0.9 }}
+    aria-label="Configurações"
           >
             <Settings size={14} />
           </motion.button>
@@ -344,11 +395,11 @@ export function DJBoyShell() {
                   transition={{ duration: isActive ? 2.2 : 4.0, repeat: Infinity, ease: "easeInOut" }}
                 />
                 <Orb
-                  className="w-[300px] h-[300px]"
-                  orbState={effectiveOrb}
-                  audioLevel={audioLevel}
-                />
-              </motion.button>
+  className="w-[300px] h-[300px]"
+  orbState={effectiveOrb}
+  audioLevel={demoMode ? demoAudioLevel : audioLevel}
+  />
+  </motion.button>
 
               {/* Status label + action */}
               <div className="flex flex-col items-center gap-5 mt-2">
@@ -406,11 +457,11 @@ export function DJBoyShell() {
                 className="relative outline-none"
               >
                 <Orb
-                  className="w-[88px] h-[88px]"
-                  orbState={effectiveOrb}
-                  audioLevel={audioLevel}
-                />
-              </motion.button>
+  className="w-[88px] h-[88px]"
+  orbState={effectiveOrb}
+  audioLevel={demoMode ? demoAudioLevel : audioLevel}
+  />
+  </motion.button>
               <p className="text-[10px] tracking-[0.16em] uppercase font-medium" style={{ color: "rgba(255,255,255,0.28)" }}>
                 {STATE_LABEL[effectiveOrb]}
               </p>
@@ -498,7 +549,7 @@ export function DJBoyShell() {
         </AnimatePresence>
       </main>
 
-      {/* ── Input bar ──────────────────────────────────────────────────────── */}
+      {/* ── Input bar ──────��───────────────────────────────────────────────── */}
       <div className="relative z-10 px-4 pb-6 pt-2 w-full max-w-[680px] mx-auto">
         {/* Attachments */}
         <AnimatePresence>

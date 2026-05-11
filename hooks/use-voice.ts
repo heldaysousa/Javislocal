@@ -98,8 +98,12 @@ export function useVoice({
   // Create and start a recognition session
   const createSession = useCallback(
     (mode: "wake" | "command") => {
+      console.log("[v0] createSession chamado com modo:", mode)
       const SpeechRec = getSpeechRec()
-      if (!SpeechRec || !activeRef.current) return
+      if (!SpeechRec || !activeRef.current) {
+        console.log("[v0] createSession abortado - SpeechRec:", !!SpeechRec, "activeRef:", activeRef.current)
+        return
+      }
 
       const rec = new SpeechRec()
       rec.lang = lang
@@ -121,6 +125,7 @@ export function useVoice({
         const all = (accumulatedRef.current + " " + final + " " + interim)
           .trim()
           .toLowerCase()
+        console.log("[v0] onresult - mode:", mode, "all:", all, "interim:", interim, "final:", final)
 
         if (mode === "wake") {
           // Check for wake word in any accumulated text
@@ -193,22 +198,31 @@ export function useVoice({
   )
 
   const start = useCallback(async () => {
-    if (activeRef.current) return
+    console.log("[v0] useVoice.start() chamado")
+    if (activeRef.current) {
+      console.log("[v0] start() ignorado - já ativo")
+      return
+    }
     const SpeechRec = getSpeechRec()
     if (!SpeechRec) {
+      console.log("[v0] Web Speech API NÃO suportada")
       setError("Web Speech API não suportada neste navegador.")
       return
     }
+    console.log("[v0] Web Speech API disponível, solicitando microfone...")
     try {
       await navigator.mediaDevices.getUserMedia({ audio: true })
       setPermissionGranted(true)
       setError(null)
-    } catch {
+      console.log("[v0] Permissão de microfone concedida")
+    } catch (e) {
+      console.log("[v0] Erro ao solicitar microfone:", e)
       setError("Permissão de microfone negada.")
       return
     }
     activeRef.current = true
     await startAnalyser(micDeviceId)
+    console.log("[v0] Analyser iniciado, criando sessão wake...")
     createSession("wake")
   }, [getSpeechRec, micDeviceId, createSession])
 
