@@ -1,27 +1,40 @@
 "use client"
 
-import { useCallback, useRef, useState } from "react"
+import { useRef, useState, useCallback } from "react"
 
-export type TTSProvider = "browser" | "google"
+export type TTSProvider = "browser" | "google" | "gemini-tts"
 
 interface UseTTSOptions {
-  provider: TTSProvider
+  provider?: TTSProvider
   googleApiKey?: string
+  geminiApiKey?: string
   lang?: string
   onStart?: () => void
   onEnd?: () => void
 }
 
-export function useTTS({ provider, googleApiKey, lang = "pt-BR", onStart, onEnd }: UseTTSOptions) {
+export function useTTS({
+  provider = "browser",
+  googleApiKey,
+  geminiApiKey,
+  lang = "pt-BR",
+  onStart,
+  onEnd,
+}: UseTTSOptions = {}) {
   const [isSpeaking, setIsSpeaking] = useState(false)
-  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const audioRef  = useRef<HTMLAudioElement | null>(null)
+  const sourceRef = useRef<AudioBufferSourceNode | null>(null)
+  const ctxRef    = useRef<AudioContext | null>(null)
 
   const stop = useCallback(() => {
     if (provider === "browser") {
-      window.speechSynthesis.cancel()
+      if (typeof window !== "undefined") window.speechSynthesis?.cancel()
     } else {
-      audioRef.current?.pause()
-      audioRef.current = null
+      try { sourceRef.current?.stop() } catch { /* already stopped */ }
+      if (audioRef.current) {
+        audioRef.current.pause()
+        audioRef.current.src = ""
+      }
     }
     setIsSpeaking(false)
     onEnd?.()
@@ -29,21 +42,81 @@ export function useTTS({ provider, googleApiKey, lang = "pt-BR", onStart, onEnd 
 
   const speak = useCallback(
     async (text: string) => {
-      // Strip markdown and truncate for voice
-      const clean = text
-        .replace(/#{1,6}\s/g, "")
-        .replace(/\*{1,2}([^*]+)\*{1,2}/g, "$1")
-        .replace(/`{1,3}[^`]*`{1,3}/g, "")
-        .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-        .replace(/\n{2,}/g, ". ")
-        .replace(/\n/g, " ")
-        .trim()
-
-      if (!clean) return
-
+      if (!text.trim()) return
+      stop()
       setIsSpeaking(true)
       onStart?.()
 
+      // ── Browser TTS (BUG-4 fix: resume + chunking) ──────────────────────
+      if (provider === "browser") {
+        if (typeof window === "undefined") { setIsSpeaking(false); onEnd?.(); return }
+
+        // Resume se o contexto de áudio estiver suspenso
+        if (window.speechSynthesis.paused) window.speechSynthesis.resume()
+
+        const voices = window.speechSynthesis.getVoices()
+        const ptVoice = voices.find((v) => v.lang.startsWith("pt")) ?? null
+
+        // Chrome para de falar após ~15s — dividir em chunks
+        const chunks = text.match(/.{1,200}(?:\s|$)/g) ?? [text]
+        let i = 0
+        const speakChunk = () => {
+          if (i >= chunks.length) {
+            setIsSpeaking(false)
+            onEnd?.()
+            return
+          }
+          const u = new SpeechSynthesisUtterance(chunks[i++])
+          u.lang = lang
+          u.rate = 1.05
+          u.pitch = 1.0
+          if (ptVoice) u.voice = ptVoice
+          u.onend = speakChunk
+          u.onerror = () => {
+            setIsSpeaking(false)
+            onEnd?.()
+          }
+          window.speechSynthesis.speak(u)
+        }
+        speakChunk()
+        return
+      }
+
+      // ── Gemini TTS via /api/tts ──────────────────────────────────────────
+      if (provider === "gemini-tts") {
+        try {
+          const res = await fetch("/api/tts", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text, apiKey: geminiApiKey || undefined }),
+          })
+          if (!res.ok) throw new Error(`TTS HTTP ${res.status}`)
+          const buf = await res.arrayBuffer()
+
+          const Ctx =
+            window.AudioContext ||
+            (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+          const ctx = new Ctx()
+          ctxRef.current = ctx
+          const decoded = await ctx.decodeAudioData(buf)
+          const source = ctx.createBufferSource()
+          source.buffer = decoded
+          source.connect(ctx.destination)
+          sourceRef.current = source
+          source.onended = () => {
+            setIsSpeaking(false)
+            onEnd?.()
+          }
+          source.start()
+        } catch {
+          // Fallback silencioso ao browser TTS
+          setIsSpeaking(false)
+          onEnd?.()
+        }
+        return
+      }
+
+      // ── Google Neural TTS ────────────────────────────────────────────────
       if (provider === "google" && googleApiKey) {
         try {
           const res = await fetch(
@@ -52,20 +125,11 @@ export function useTTS({ provider, googleApiKey, lang = "pt-BR", onStart, onEnd 
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
-                input: { text: clean },
-                voice: {
-                  languageCode: lang,
-                  name: "pt-BR-Neural2-B",
-                  ssmlGender: "MALE",
-                },
-                audioConfig: {
-                  audioEncoding: "MP3",
-                  speakingRate: 1.05,
-                  pitch: -1,
-                  effectsProfileId: ["headphone-class-device"],
-                },
+                input: { text },
+                voice: { languageCode: lang, ssmlGender: "NEUTRAL" },
+                audioConfig: { audioEncoding: "MP3" },
               }),
-            }
+            },
           )
           const data = await res.json()
           if (data.audioContent) {
@@ -80,51 +144,22 @@ export function useTTS({ provider, googleApiKey, lang = "pt-BR", onStart, onEnd 
               onEnd?.()
             }
             await audio.play()
-            return
+          } else {
+            setIsSpeaking(false)
+            onEnd?.()
           }
         } catch {
-          // Fallback to browser TTS if Google fails
+          setIsSpeaking(false)
+          onEnd?.()
         }
+        return
       }
 
-      // Browser TTS fallback
-      window.speechSynthesis.cancel()
-      const utter = new SpeechSynthesisUtterance(clean)
-      utter.lang = lang
-      utter.rate = 1.05
-      utter.pitch = 0.92
-
-      // Wait for voices to load
-      const loadVoices = () => {
-        const voices = window.speechSynthesis.getVoices()
-        const preferred = voices.find(
-          (v) =>
-            v.lang.startsWith("pt") &&
-            (v.name.includes("Google") || v.name.includes("Daniel") || v.name.includes("Luciana"))
-        )
-        if (preferred) utter.voice = preferred
-      }
-      if (window.speechSynthesis.getVoices().length > 0) {
-        loadVoices()
-      } else {
-        window.speechSynthesis.onvoiceschanged = loadVoices
-      }
-
-      utter.onstart = () => {
-        setIsSpeaking(true)
-        onStart?.()
-      }
-      utter.onend = () => {
-        setIsSpeaking(false)
-        onEnd?.()
-      }
-      utter.onerror = () => {
-        setIsSpeaking(false)
-        onEnd?.()
-      }
-      window.speechSynthesis.speak(utter)
+      // Provider não configurado
+      setIsSpeaking(false)
+      onEnd?.()
     },
-    [provider, googleApiKey, lang, onStart, onEnd]
+    [provider, lang, googleApiKey, geminiApiKey, stop, onStart, onEnd],
   )
 
   return { speak, stop, isSpeaking }

@@ -10,27 +10,36 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "API key não configurada" }, { status: 401 })
     }
 
+    const msgs = ((messages ?? []) as { role: string; content: string }[])
+    if (msgs.length === 0) {
+      return NextResponse.json({ error: "Mensagem vazia" }, { status: 400 })
+    }
+
+    const last = msgs[msgs.length - 1]
+    if (!last?.content?.trim()) {
+      return NextResponse.json({ error: "Conteúdo vazio" }, { status: 400 })
+    }
+
     const genAI = new GoogleGenerativeAI(key)
     const model = genAI.getGenerativeModel({
       model: "gemini-2.0-flash",
       systemInstruction:
         systemPrompt ||
-        "Você é DJ Boy, assistente pessoal de alto nível. Seja direto e conciso.",
+        "Você é DJ Boy, assistente pessoal de alto nível. Respostas diretas e concisas.",
     })
 
-    const msgs = (messages as { role: string; content: string }[])
-    if (!msgs || msgs.length === 0) {
-      return NextResponse.json({ error: "Mensagem vazia" }, { status: 400 })
-    }
-    const history = msgs.slice(0, -1).map((m) => ({
+    const rawHistory = msgs.slice(0, -1).map((m) => ({
       role: m.role === "assistant" ? "model" : "user",
       parts: [{ text: m.content }],
     }))
-    const last = msgs[msgs.length - 1]
-    if (!last?.content) {
-      return NextResponse.json({ error: "Última mensagem vazia" }, { status: 400 })
-    }
-    const chat = model.startChat({ history })
+
+    // A API Gemini não aceita histórico começando com "model"
+    const cleanHistory =
+      rawHistory.length > 0 && rawHistory[0].role === "model"
+        ? rawHistory.slice(1)
+        : rawHistory
+
+    const chat = model.startChat({ history: cleanHistory })
     const result = await chat.sendMessage(last.content)
 
     return NextResponse.json({ response: result.response.text() })

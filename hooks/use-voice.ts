@@ -17,87 +17,80 @@ export function useVoice({
   wakeName = "dj boy",
   micDeviceId,
   lang = "pt-BR",
-  silenceMs = 1400,
+  silenceMs = 1600,
   onTranscript,
   onStateChange,
 }: UseVoiceOptions) {
   const [state, setState] = useState<VoiceState>("idle")
   const [audioLevel, setAudioLevel] = useState(0)
-  const [permissionGranted, setPermissionGranted] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const recognitionRef = useRef<SpeechRecognition | null>(null)
-  const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const accumulatedRef = useRef("")
-  const modeRef = useRef<"wake" | "command">("wake")
-  const audioCtxRef = useRef<AudioContext | null>(null)
+  const recRef      = useRef<SpeechRecognition | null>(null)
+  const silRef      = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const accRef      = useRef("")
+  const modeRef     = useRef<"wake" | "command">("wake")
+  const ctxRef      = useRef<AudioContext | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
-  const rafRef = useRef<number>(0)
-  const streamRef = useRef<MediaStream | null>(null)
-  const activeRef = useRef(false)
+  const rafRef      = useRef<number>(0)
+  const streamRef   = useRef<MediaStream | null>(null)
+  const activeRef   = useRef(false)
 
-  const updateState = useCallback(
+  const emit = useCallback(
     (s: VoiceState) => {
       setState(s)
       onStateChange?.(s)
     },
-    [onStateChange]
+    [onStateChange],
   )
 
-  // Start audio level analyser
-  async function startAnalyser(deviceId?: string) {
+  // ── Audio level analyser ───────────────────────────────────────────────────
+  const startAnalyser = useCallback(async (deviceId?: string) => {
     try {
-      const constraints: MediaStreamConstraints = {
+      const stream = await navigator.mediaDevices.getUserMedia({
         audio: deviceId ? { deviceId: { exact: deviceId } } : true,
-      }
-      const stream = await navigator.mediaDevices.getUserMedia(constraints)
+      })
       streamRef.current = stream
-
-      const AudioCtx =
+      const Ctx =
         window.AudioContext ||
         (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
-      audioCtxRef.current = new AudioCtx()
-      analyserRef.current = audioCtxRef.current.createAnalyser()
+      ctxRef.current = new Ctx()
+      analyserRef.current = ctxRef.current.createAnalyser()
       analyserRef.current.fftSize = 512
-      const source = audioCtxRef.current.createMediaStreamSource(stream)
-      source.connect(analyserRef.current)
-
+      ctxRef.current.createMediaStreamSource(stream).connect(analyserRef.current)
       const data = new Uint8Array(analyserRef.current.frequencyBinCount)
       const tick = () => {
         if (!analyserRef.current) return
         analyserRef.current.getByteFrequencyData(data)
-        const avg = data.reduce((a, b) => a + b, 0) / data.length
-        setAudioLevel(avg / 128)
+        setAudioLevel(data.reduce((a, b) => a + b, 0) / data.length / 128)
         rafRef.current = requestAnimationFrame(tick)
       }
       tick()
-      return true
     } catch {
-      return false
+      // mic denied — tratado em start()
     }
-  }
+  }, [])
 
-  function stopAnalyser() {
+  const stopAnalyser = useCallback(() => {
     cancelAnimationFrame(rafRef.current)
     analyserRef.current = null
-    audioCtxRef.current?.close().catch(() => {})
-    audioCtxRef.current = null
+    ctxRef.current?.close().catch(() => {})
+    ctxRef.current = null
     streamRef.current?.getTracks().forEach((t) => t.stop())
     streamRef.current = null
     setAudioLevel(0)
-  }
-
-  const getSpeechRec = useCallback(() => {
-    if (typeof window === "undefined") return null
-    return (
-      window.SpeechRecognition ||
-      (window as unknown as { webkitSpeechRecognition?: typeof SpeechRecognition })
-        .webkitSpeechRecognition ||
-      null
-    )
   }, [])
 
-  // Create and start a recognition session
+  // ── SpeechRecognition factory — BUG-1 fix ────────────────────────────────
+  const getSpeechRec = useCallback((): (new () => SpeechRecognition) | null => {
+    if (typeof window === "undefined") return null
+    const w = window as unknown as {
+      SpeechRecognition?: new () => SpeechRecognition
+      webkitSpeechRecognition?: new () => SpeechRecognition
+    }
+    return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null
+  }, [])
+
+  // ── Session management ────────────────────────────────────────────────────
   const createSession = useCallback(
     (mode: "wake" | "command") => {
       const SpeechRec = getSpeechRec()
@@ -107,55 +100,41 @@ export function useVoice({
       rec.lang = lang
       rec.continuous = true
       rec.interimResults = true
-      recognitionRef.current = rec
+      recRef.current = rec
       modeRef.current = mode
-      accumulatedRef.current = ""
+      accRef.current = ""
 
       rec.onresult = (e: SpeechRecognitionEvent) => {
         let interim = ""
         let final = ""
         for (let i = e.resultIndex; i < e.results.length; i++) {
           const t = e.results[i][0].transcript
-          if (e.results[i].isFinal) final += t
-          else interim += t
+          e.results[i].isFinal ? (final += t) : (interim += t)
         }
 
-        const all = (accumulatedRef.current + " " + final + " " + interim)
-          .trim()
-          .toLowerCase()
-
         if (mode === "wake") {
-          // Check for wake word in any accumulated text
-          const variations = [
-            wakeName,
-            wakeName.replace(" ", ""),
-            "dj boi",
-            "dj boy",
-            "deejay boy",
-          ]
-          const detected = variations.some((v) => all.includes(v))
-          if (detected) {
+          const all = (accRef.current + " " + final + " " + interim).trim().toLowerCase()
+          const variants = [wakeName, wakeName.replace(" ", ""), "dj boi", "dj boy", "deejay boy"]
+          if (variants.some((v) => all.includes(v))) {
             rec.stop()
-            updateState("listening")
-            if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current)
+            emit("listening")
+            if (silRef.current) clearTimeout(silRef.current)
             setTimeout(() => activeRef.current && createSession("command"), 300)
+          } else {
+            if (final) accRef.current += " " + final
           }
         } else {
-          // Command mode — accumulate final transcripts
-          if (final) accumulatedRef.current += " " + final
-
-          // Reset silence timer on any speech
-          if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current)
+          if (final) accRef.current += " " + final
+          if (silRef.current) clearTimeout(silRef.current)
           if (interim || final) {
-            silenceTimerRef.current = setTimeout(() => {
+            silRef.current = setTimeout(() => {
               rec.stop()
-              const transcript = accumulatedRef.current.trim()
+              const transcript = accRef.current.trim()
               if (transcript) {
                 onTranscript(transcript)
               } else {
-                // Nothing captured, go back to wake mode
-                if (activeRef.current) createSession("wake")
-                updateState("wake-listening")
+                emit("wake-listening")
+                if (activeRef.current) setTimeout(() => createSession("wake"), 200)
               }
             }, silenceMs)
           }
@@ -164,28 +143,26 @@ export function useVoice({
 
       rec.onerror = (e: SpeechRecognitionErrorEvent) => {
         if (e.error === "no-speech" || e.error === "audio-capture") {
-          // Restart silently
-          if (activeRef.current) setTimeout(() => createSession(mode), 200)
+          if (activeRef.current) setTimeout(() => createSession(mode), 300)
           return
         }
         if (e.error === "not-allowed") {
           setError("Permissão de microfone negada.")
-          setPermissionGranted(false)
           activeRef.current = false
-          updateState("idle")
+          emit("idle")
           stopAnalyser()
         }
       }
 
+      // BUG-2 fix: command mode onend sempre volta para wake-listening
       rec.onend = () => {
         if (!activeRef.current) return
         if (mode === "wake") {
           setTimeout(() => createSession("wake"), 200)
         } else {
-          // command mode terminou sem transcript capturado — volta para wake
-          const transcript = accumulatedRef.current.trim()
-          if (!transcript) {
-            updateState("wake-listening")
+          // Só reabre wake se onTranscript ainda não foi chamado (acc vazio)
+          if (!accRef.current.trim()) {
+            emit("wake-listening")
             setTimeout(() => createSession("wake"), 200)
           }
         }
@@ -193,24 +170,24 @@ export function useVoice({
 
       try {
         rec.start()
-        if (mode === "wake") updateState("wake-listening")
       } catch {
-        // Already started
+        /* já iniciado */
       }
+      if (mode === "wake") emit("wake-listening")
     },
-    [lang, wakeName, silenceMs, onTranscript, updateState, getSpeechRec]
+    [lang, wakeName, silenceMs, onTranscript, emit, getSpeechRec, stopAnalyser],
   )
 
+  // ── Public API ────────────────────────────────────────────────────────────
   const start = useCallback(async () => {
     if (activeRef.current) return
     const SpeechRec = getSpeechRec()
     if (!SpeechRec) {
-      setError("Web Speech API não suportada neste navegador.")
+      setError("Web Speech API não suportada neste navegador. Use Chrome ou Edge.")
       return
     }
     try {
       await navigator.mediaDevices.getUserMedia({ audio: true })
-      setPermissionGranted(true)
       setError(null)
     } catch {
       setError("Permissão de microfone negada.")
@@ -219,45 +196,35 @@ export function useVoice({
     activeRef.current = true
     await startAnalyser(micDeviceId)
     createSession("wake")
-  }, [getSpeechRec, micDeviceId, createSession])
+  }, [getSpeechRec, micDeviceId, createSession, startAnalyser])
 
   const stop = useCallback(() => {
     activeRef.current = false
-    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current)
-    recognitionRef.current?.stop()
-    recognitionRef.current = null
+    if (silRef.current) clearTimeout(silRef.current)
+    recRef.current?.stop()
+    recRef.current = null
     stopAnalyser()
-    updateState("idle")
-  }, [updateState])
+    emit("idle")
+  }, [emit, stopAnalyser])
 
-  // Manual push-to-talk trigger (skip wake word)
   const pushToTalk = useCallback(() => {
     if (!activeRef.current) return
-    recognitionRef.current?.stop()
-    recognitionRef.current = null
-    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current)
-    updateState("listening")
+    recRef.current?.stop()
+    recRef.current = null
+    if (silRef.current) clearTimeout(silRef.current)
+    emit("listening")
     setTimeout(() => createSession("command"), 200)
-  }, [createSession, updateState])
+  }, [createSession, emit])
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
+  useEffect(
+    () => () => {
       activeRef.current = false
-      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current)
-      recognitionRef.current?.stop()
+      if (silRef.current) clearTimeout(silRef.current)
+      recRef.current?.stop()
       stopAnalyser()
-    }
-  }, [])
+    },
+    [stopAnalyser],
+  )
 
-  return {
-    state,
-    audioLevel,
-    permissionGranted,
-    error,
-    start,
-    stop,
-    pushToTalk,
-    isActive: activeRef,
-  }
+  return { state, audioLevel, error, start, stop, pushToTalk, isActive: activeRef }
 }

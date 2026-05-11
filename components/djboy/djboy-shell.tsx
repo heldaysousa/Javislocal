@@ -7,6 +7,7 @@ import { Orb, type AgentState } from "@/components/ui/orb"
 import { useVoice } from "@/hooks/use-voice"
 import { useTTS } from "@/hooks/use-tts"
 import { useMemory, type MemoryStore, type ProjectContext } from "@/hooks/use-memory"
+import { useAudioEngine } from "@/hooks/use-audio-engine"
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -21,8 +22,9 @@ interface Message {
 interface Settings {
   provider: "deepseek" | "gemini" | "openai" | "anthropic"
   apiKeys: Record<string, string>
-  ttsProvider: "browser" | "google"
+  ttsProvider: "browser" | "google" | "gemini-tts"
   googleTTSKey: string
+  geminiApiKey: string
   micDeviceId: string
   systemPrompt: string
 }
@@ -53,6 +55,7 @@ const DEFAULT_SETTINGS: Settings = {
   apiKeys: {},
   ttsProvider: "browser",
   googleTTSKey: "",
+  geminiApiKey: "",
   micDeviceId: "",
   systemPrompt: DEFAULT_PROMPT,
 }
@@ -105,6 +108,7 @@ export function DJBoyShell() {
   const messagesEnd  = useRef<HTMLDivElement>(null)
   const fileRef      = useRef<HTMLInputElement>(null)
   const memory       = useMemory()
+  const audio        = useAudioEngine()
 
   useEffect(() => { settingsRef.current = settings }, [settings])
   useEffect(() => { messagesRef.current = messages }, [messages])
@@ -145,29 +149,29 @@ export function DJBoyShell() {
 
     // Gemini: rota server-side para evitar CORS e exposição de key no browser
     if (s.provider === "gemini") {
-      const history = messagesRef.current.slice(-14).map(m => ({
-        role: m.role,
+      const geminiHistory = messagesRef.current.slice(-14).map(m => ({
+        role: m.role as "user" | "assistant",
         content: m.content,
       }))
-      // Garante que o último item é sempre o user message atual
-      const allMessages = [...history, { role: "user" as const, content: msg }]
+      const payload = [...geminiHistory, { role: "user" as const, content: msg }]
+      if (payload.length === 0) throw new Error("Mensagem vazia")
 
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          messages: allMessages,
+          messages: payload,
           systemPrompt: sys,
           apiKey: key || undefined,
         }),
       })
       if (!res.ok) {
-        const errData = await res.json().catch(() => ({}))
-        throw new Error((errData as { error?: string }).error || `HTTP ${res.status}`)
+        const errJson = await res.json().catch(() => ({})) as { error?: string }
+        throw new Error(errJson.error || `HTTP ${res.status}`)
       }
-      const data = await res.json()
+      const data = await res.json() as { response?: string; error?: string }
       if (data.error) throw new Error(data.error)
-      return data.response as string
+      return data.response ?? ""
     }
 
     const headers: Record<string, string> = { "Content-Type": "application/json", Authorization: `Bearer ${key}` }
@@ -193,6 +197,7 @@ export function DJBoyShell() {
   const { speak, stop: stopSpeaking, isSpeaking } = useTTS({
     provider: settings.ttsProvider,
     googleApiKey: settings.googleTTSKey || undefined,
+    geminiApiKey: settings.geminiApiKey || undefined,
     lang: "pt-BR",
     onStart: () => setOrbState("speaking"),
     onEnd:   () => setOrbState(isActive ? "wake-listening" : "idle"),
@@ -210,12 +215,14 @@ export function DJBoyShell() {
     if (!showChat) setShowChat(true)
     setIsThinking(true)
     setOrbState("thinking")
+    audio.thinking()
 
     try {
       const reply = await callLLM(content, atts)
       const aMsg: Message = { id: crypto.randomUUID(), role: "assistant", content: reply, timestamp: new Date() }
       setMessages(prev => [...prev, aMsg])
       memory.addEntry("assistant", reply)
+      audio.speakingStart()
       speak(reply)
     } catch {
       const errMsg: Message = { id: crypto.randomUUID(), role: "assistant", content: "Erro ao processar. Verifique sua API key.", timestamp: new Date() }
@@ -234,7 +241,7 @@ export function DJBoyShell() {
     silenceMs:   1400,
     onTranscript: text => handleSend(text),
     onStateChange: vs => {
-      if (vs === "listening")           setOrbState("listening")
+      if (vs === "listening")           { setOrbState("listening"); audio.wakeDetected() }
       else if (vs === "wake-listening") setOrbState("wake-listening")
     },
   })
@@ -243,7 +250,7 @@ export function DJBoyShell() {
     if (isActive) {
       stop(); stopSpeaking(); setIsActive(false); setOrbState("idle")
     } else {
-      setIsActive(true); setOrbState("wake-listening"); await start()
+      setIsActive(true); setOrbState("wake-listening"); audio.ready(); await start()
     }
   }, [isActive, start, stop, stopSpeaking])
 
@@ -810,7 +817,7 @@ function SettingsDrawer({ open, settings, onChange, onClose, microphones, memory
                 <>
                   {label("Motor TTS")}
                   <div className="grid grid-cols-2 gap-2 mb-5">
-                    {[{ id: "browser", label: "Navegador" }, { id: "google", label: "Google Neural" }].map(e => (
+                    {[{ id: "browser", label: "Navegador" }, { id: "google", label: "Google Neural" }, { id: "gemini-tts", label: "Gemini TTS" }].map(e => (
                       <button
                         key={e.id}
                         onClick={() => onChange({ ...settings, ttsProvider: e.id as Settings["ttsProvider"] })}
@@ -826,6 +833,19 @@ function SettingsDrawer({ open, settings, onChange, onClose, microphones, memory
                     ))}
                   </div>
 
+                  {settings.ttsProvider === "gemini-tts" && (
+                    <div className="mt-3">
+                      {label("Gemini TTS API Key")}
+                      <input
+                        type="password"
+                        className="w-full px-3 py-2 text-[13px] outline-none"
+                        style={inputStyle}
+                        placeholder="AIza..."
+                        value={settings.geminiApiKey}
+                        onChange={e => onChange({ ...settings, geminiApiKey: e.target.value })}
+                      />
+                    </div>
+                  )}
                   {settings.ttsProvider === "google" && (
                     <>
                       {label("Google TTS API Key")}
