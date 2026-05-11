@@ -143,6 +143,26 @@ export function DJBoyShell() {
     let msg = content
     if (atts?.length) msg += "\n\n" + atts.map(a => a.type === "link" ? `[Link: ${a.url}]` : `[${a.name}]`).join("\n")
 
+    // Gemini: rota server-side para evitar CORS e exposição de key no browser
+    if (s.provider === "gemini") {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [
+            ...messagesRef.current.slice(-14).map(m => ({ role: m.role, content: m.content })),
+            { role: "user", content: msg },
+          ],
+          systemPrompt: sys,
+          apiKey: key,
+        }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json()
+      if (data.error) throw new Error(data.error)
+      return data.response as string
+    }
+
     const headers: Record<string, string> = { "Content-Type": "application/json", Authorization: `Bearer ${key}` }
     let body: object
 
@@ -888,7 +908,7 @@ function SettingsDrawer({ open, settings, onChange, onClose, microphones, memory
                     <button
                       onClick={() => {
                         if (!newProj.name) return
-                        onUpsertProject?.({ name: newProj.name!, description: newProj.description ?? "", tech: (newProj.tech ?? "").split(",").map(t => t.trim()).filter(Boolean), notes: "", lastUpdated: new Date().toISOString() })
+                        onUpsertProject?.({ name: newProj.name!, description: newProj.description ?? "", tech: (typeof newProj.tech === "string" ? newProj.tech : (newProj.tech ?? []).join(",")).split(",").map((t: string) => t.trim()).filter(Boolean), notes: "", lastUpdated: new Date().toISOString() })
                         setNewProj({})
                       }}
                       className="flex items-center justify-center gap-1 py-2 rounded-xl text-[12px] font-medium transition-all"
