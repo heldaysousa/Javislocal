@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { X, Trash2, Eye, EyeOff, Brain, Plus } from "lucide-react"
-import type { MemoryStore, ProjectContext } from "@/hooks/use-memory" from "lucide-react"
+import type { MemoryStore, ProjectContext } from "@/hooks/use-memory"
 
 export interface DJBoySettings {
   provider: "deepseek" | "gemini" | "openai" | "anthropic"
